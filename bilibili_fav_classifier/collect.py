@@ -1,6 +1,7 @@
 """Async browser automation: collect all videos from the default favorite folder.
 
 Entry point: collect() — launches Playwright, logs in via QR, scrapes favorites.
+User IDs are auto-detected from the API and persisted to config.json.
 """
 from __future__ import annotations
 
@@ -17,9 +18,8 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from bilibili_fav_classifier.config import (
     API_BASE,
     COOKIES_PATH,
-    DEFAULT_FAV_ID,
     FAVS_JSON,
-    USER_MID,
+    save_user_config,
 )
 from bilibili_fav_classifier.session import save_cookies
 
@@ -55,17 +55,18 @@ async def wait_for_login(page, timeout: int = 180):
 
 
 async def collect():
-    """Launch browser, log in, scrape all videos from default favorite folder."""
+    """Launch browser, log in, scrape all videos from default favorite folder.
+
+    User MID and default fav ID are auto-detected from the API on first run
+    and persisted to config.json for subsequent runs.
+    """
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=False, executable_path=CHROME_PATH, args=BROWSER_ARGS,
         )
         context = await browser.new_context()
         page = await context.new_page()
-        await page.goto(
-            f"https://space.bilibili.com/{USER_MID}/favlist?fid={DEFAULT_FAV_ID}",
-            wait_until="domcontentloaded",
-        )
+        await page.goto("https://space.bilibili.com/", wait_until="domcontentloaded")
         await asyncio.sleep(3)
 
         mid = await wait_for_login(page)
@@ -76,10 +77,11 @@ async def collect():
         print(f"==> 登录用户 mid={mid}")
         await save_cookies(context)
 
+        # Fetch folders list using the logged-in user's mid
         folders = await page.evaluate(f'''async () => {{
             const r = await fetch(
                 "{API_BASE}/x/v3/fav/folder/created/list-all"
-                + "?up_mid={USER_MID}&platform=web"
+                + "?up_mid={mid}&platform=web"
             );
             const j = await r.json();
             return j.data?.list || [];
@@ -94,9 +96,19 @@ async def collect():
         default = next(
             (f for f in folders if "默认" in (f.get("title") or "")), None
         )
-        default_id = default.get("id") if default else DEFAULT_FAV_ID
+        default_id = default.get("id") if default else 0
         print(f"==> 默认收藏夹: {default.get('title') if default else '默认'}"
               f" (id={default_id})")
+
+        # Persist user config for future runs
+        save_user_config(str(mid), default_id)
+        print(f"==> 用户配置已保存到 config.json")
+
+        if not default_id:
+            print("==> 未找到默认收藏夹, 退出")
+            await context.close()
+            return
+
         print("==> 正在拉取默认收藏夹的全部视频...")
 
         all_items = await page.evaluate(f'''async () => {{
@@ -104,7 +116,7 @@ async def collect():
             for (let pn = 1; pn <= 200; pn++) {{
                 const r = await fetch(
                     "{API_BASE}/x/v3/fav/resource/list"
-                    + "?media_id={DEFAULT_FAV_ID}&pn=" + pn
+                    + "?media_id={default_id}&pn=" + pn
                     + "&ps=20&platform=web&order=mtime"
                 );
                 const j = await r.json();

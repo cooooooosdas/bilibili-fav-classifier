@@ -57,4 +57,5 @@ __all__ = [
     "Session",
     "save_cookies",
     # Config helpers
+    "USER_MID",
 ]

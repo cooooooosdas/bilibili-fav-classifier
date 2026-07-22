@@ -14,24 +14,26 @@ from bilibili_fav_classifier.config import (
     API_BASE,
     APPLY_LOG_JSON,
     BATCH_SIZE,
-    DEFAULT_FAV_ID,
-    USER_MID,
+    load_user_config,
 )
 from bilibili_fav_classifier.session import HttpClient
 
 
 def _load_folders(http: HttpClient) -> tuple[dict[str, int], int]:
     """Return (name_to_id, default_id) from Bilibili API."""
+    user_cfg = load_user_config()
+    user_mid = user_cfg.get("USER_MID", "")
+    default_fav_id = user_cfg.get("DEFAULT_FAV_ID", 0)
     data = http.get(
         f"{API_BASE}/x/v3/fav/folder/created/list-all"
-        f"?up_mid={USER_MID}&platform=web"
+        f"?up_mid={user_mid}&platform=web"
     )
     folders = data.get("data", {}).get("list", [])
     name_to_id = {f.get("title"): f.get("id") for f in folders if f.get("id")}
     default = next(
         (f for f in folders if "默认" in (f.get("title") or "")), None
     )
-    default_id = default.get("id") if default else DEFAULT_FAV_ID
+    default_id = default.get("id") if default else default_fav_id
     return name_to_id, default_id
 
 
@@ -41,11 +43,12 @@ def _batch_move(
     resources: list[str],
 ) -> dict:
     """Batch move videos via /x/v3/fav/resource/move API."""
+    user_cfg = load_user_config()
     data = {
         "resources": ",".join(f"{r}:2" for r in resources),
         "src_media_id": str(src_media_id),
         "tar_media_id": str(tar_media_id),
-        "mid": USER_MID,
+        "mid": user_cfg.get("USER_MID", ""),
         "platform": "web",
         "csrf": csrf,
     }

@@ -11,7 +11,7 @@ import requests
 
 from bilibili_fav_classifier.config import (
     COOKIES_PATH,
-    USER_MID,
+    load_user_config,
 )
 
 DEFAULT_HEADERS = {
@@ -43,7 +43,7 @@ class Session:
 
     @property
     def mid(self) -> str:
-        return USER_MID
+        return load_user_config().get("USER_MID", "")
 
     def http(self) -> HttpClient:
         """Create an HTTP client bound to this session."""

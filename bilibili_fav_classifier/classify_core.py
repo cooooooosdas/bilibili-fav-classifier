@@ -15,6 +15,7 @@ from bilibili_fav_classifier.config import (
     AUTO_CLASSIFY_JSON,
     FAVS_JSON,
     PLAN_JSON,
+    load_user_config,
 )
 from bilibili_fav_classifier.mappings import load_seed_mappings
 from bilibili_fav_classifier.rules import (

@@ -15,6 +15,7 @@ apply_log.json
 auto_classified.json
 enrich_cache.json
 up_summary.json
+config.json
 browser_data/
 
 # IDE

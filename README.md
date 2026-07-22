@@ -22,8 +22,7 @@
 ### 下载
 
 1. 进入 [Releases 页面](https://github.com/cooooooosdas/bilibili-fav-classifier/releases)
-2. 下载 `B站收藏夹分类.zip`
-3. 解压到任意文件夹
+2. 下载 `B站收藏夹分类.zip` 并解压到任意文件夹
 
 ### 使用
 

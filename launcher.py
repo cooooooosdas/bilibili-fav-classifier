@@ -1,6 +1,6 @@
 """One-click launcher GUI for bilibili-fav-classifier.
 
-Pipeline: collect → enrich → classify → apply
+Pipeline: collect -> enrich -> classify -> apply
 Works as a Python script or a PyInstaller-frozen .exe.
 """
 from __future__ import annotations
@@ -13,14 +13,13 @@ import sys
 import threading
 from pathlib import Path
 
-import PySimpleGUI as sg
+import customtkinter as ctk
 
 from bilibili_fav_classifier.apply import apply
 from bilibili_fav_classifier.classify_core import autoclassify
 from bilibili_fav_classifier.collect import collect
 from bilibili_fav_classifier.config import (
     AUTO_CLASSIFY_JSON,
-    ENRICH_CACHE_JSON,
     FAVS_JSON,
     PLAN_JSON,
     load_user_config,
@@ -174,7 +173,7 @@ class PipelineRunner:
             )
 
         self.progress(75, "分类完成")
-        self.log(f"✓ {result.total} 个视频 → {len(result.groups)} 个文件夹")
+        self.log(f"✓ {result.total} 个视频 -> {len(result.groups)} 个文件夹")
         for folder, vids in sorted(result.groups.items(), key=lambda x: -len(x[1])):
             self.log(f"    {folder}: {len(vids)}")
         if result.unmatched_ups:
@@ -209,163 +208,266 @@ def _find_bundled_browser() -> str | None:
     return None
 
 
+# ─── Theme ────────────────────────────────────────────────────────
+
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
+
+BG = "#1a1b26"
+CARD_BG = "#24253a"
+ACCENT = "#7aa2f7"
+ACCENT_HOVER = "#89b4fa"
+SUCCESS = "#9ece6a"
+DANGER = "#f7768e"
+TEXT = "#c0caf5"
+TEXT_DIM = "#565f89"
+LOG_BG = "#16161e"
+
+
 # ─── GUI ──────────────────────────────────────────────────────────
 
-THEME = "LightBlue3"
+class App(ctk.CTk):
+    """Main application window."""
 
+    def __init__(self):
+        super().__init__()
+        self.title("B站收藏夹智能分类")
+        self.geometry("760x680")
+        self.minsize(680, 600)
+        self.configure(fg_color=BG)
 
-def _build_layout():
-    header = [
-        [
-            sg.Text(
-                "B站收藏夹智能分类",
-                font=("Microsoft YaHei", 16, "bold"),
-                pad=(10, 15),
-                expand_x=True,
-                justification="center",
-            )
-        ],
-    ]
-    status_row = [
-        [
-            sg.Text("就绪", key="-STATUS-", size=(50, 1), font=("Microsoft YaHei", 10)),
-        ],
-    ]
-    progress_row = [
-        [sg.ProgressBar(100, size=(60, 18), key="-PROG-")],
-    ]
-    log_frame = [
-        [
-            sg.Multiline(
-                size=(80, 22),
-                key="-LOG-",
-                autoscroll=True,
-                disabled=True,
-                font=("Consolas", 9),
-                text_color="#333",
-                background_color="#f7f7f7",
-                border_width=1,
-                
-                pad=(5, 5),
-            )
-        ],
-    ]
-    buttons = [
-        sg.Button(
-            "▶ 开始一键分类",
-            key="-START-",
-            size=(14, 2),
-            button_color=("white", "#4CAF50"),
-            font=("Microsoft YaHei", 10),
-        ),
-        sg.Button("⏹ 停止", key="-STOP-", disabled=True, size=(8, 1)),
-        sg.Button("\U0001f4c2 打开数据文件夹", key="-OPEN-", size=(16, 1)),
-    ]
-    footer = [
-        [
-            sg.Text(
-                "数据仅存储在本地，不会上传到任何服务器",
-                font=("Microsoft YaHei", 8),
-                text_color="gray",
-                pad=(10, 5),
-            )
-        ],
-    ]
-    return (
-        header
-        + status_row
-        + progress_row
-        + [[sg.Frame("运行日志", log_frame, expand_x=True, pad=(10, 10))]]
-        + [buttons]
-        + footer
-    )
+        self.log_q: queue.Queue = queue.Queue()
+        self.runner: PipelineRunner | None = None
+        self.running = False
 
+        self._build_ui()
+        self._init_status()
+        self._poll_queue()
 
-def main():
-    sg.theme(THEME)
-    window = sg.Window(
-        "B站收藏夹智能分类",
-        _build_layout(),
-        finalize=True,
-        resizable=True,
-    )
+    def _build_ui(self):
+        # Header
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.pack(fill="x", padx=28, pady=(26, 18))
 
-    log_q: queue.Queue = queue.Queue()
-    runner: PipelineRunner | None = None
-    running = False
+        ctk.CTkLabel(
+            header,
+            text="B站收藏夹智能分类",
+            font=ctk.CTkFont(family="Microsoft YaHei UI", size=24, weight="bold"),
+            text_color=TEXT,
+        ).pack(anchor="w")
 
-    def progress(pct: int, msg: str = ""):
-        window["-PROG-"].update(current_count=pct)
-        window["-STATUS-"].update(f"[{pct}%] {msg}")
+        ctk.CTkLabel(
+            header,
+            text="扫码登录 · 自动拉取 · 智能分类 · 一键整理",
+            font=ctk.CTkFont(family="Microsoft YaHei UI", size=12),
+            text_color=TEXT_DIM,
+        ).pack(anchor="w", pady=(2, 0))
 
-    def append_log(msg: str):
-        window["-LOG-"].update(msg + "\n", append=True)
+        # Status card
+        status_card = ctk.CTkFrame(self, fg_color=CARD_BG, corner_radius=14)
+        status_card.pack(fill="x", padx=28, pady=(0, 14))
 
-    # Initial status
-    cfg = load_user_config()
-    if cfg.get("USER_MID"):
-        append_log(f"已配置用户: MID={cfg['USER_MID']}")
-        append_log(f"默认收藏夹 ID: {cfg.get('DEFAULT_FAV_ID', '?')}")
-    else:
-        append_log("首次使用 — 点击「开始」扫码登录并自动配置")
-    append_log("数据文件目录: " + str(_base_dir()))
-    append_log("准备就绪")
+        self.status_label = ctk.CTkLabel(
+            status_card,
+            text="● 就绪",
+            font=ctk.CTkFont(family="Microsoft YaHei UI", size=13, weight="bold"),
+            text_color=TEXT_DIM,
+            anchor="w",
+        )
+        self.status_label.pack(fill="x", padx=18, pady=(16, 6))
 
-    if not _check_browsers():
-        append_log("⚠ Playwright 浏览器未安装，首次使用前请运行:")
-        append_log("  playwright install chromium")
+        self.progress_bar = ctk.CTkProgressBar(
+            status_card,
+            progress_color=ACCENT,
+            fg_color=LOG_BG,
+            height=8,
+            corner_radius=4,
+        )
+        self.progress_bar.set(0)
+        self.progress_bar.pack(fill="x", padx=18, pady=(0, 14))
 
-    while True:
-        event, _ = window.read(timeout=250)
+        # Log card
+        log_card = ctk.CTkFrame(self, fg_color=CARD_BG, corner_radius=14)
+        log_card.pack(fill="both", expand=True, padx=28, pady=(0, 14))
 
-        # Drain log queue
+        ctk.CTkLabel(
+            log_card,
+            text="运行日志",
+            font=ctk.CTkFont(family="Microsoft YaHei UI", size=12, weight="bold"),
+            text_color=TEXT_DIM,
+            anchor="w",
+        ).pack(fill="x", padx=18, pady=(14, 4))
+
+        self.log_box = ctk.CTkTextbox(
+            log_card,
+            font=ctk.CTkFont(family="Consolas", size=12),
+            text_color=TEXT,
+            fg_color=LOG_BG,
+            border_width=0,
+            corner_radius=8,
+            wrap="word",
+        )
+        self.log_box.pack(fill="both", expand=True, padx=14, pady=(0, 14))
+        self.log_box.configure(state="disabled")
+
+        # Buttons
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=28, pady=(0, 8))
+
+        self.start_btn = ctk.CTkButton(
+            btn_frame,
+            text="▶  开始一键分类",
+            command=self._on_start,
+            font=ctk.CTkFont(family="Microsoft YaHei UI", size=14, weight="bold"),
+            fg_color=SUCCESS,
+            hover_color="#7dc24f",
+            text_color="#1a1b26",
+            height=46,
+            corner_radius=12,
+        )
+        self.start_btn.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        self.stop_btn = ctk.CTkButton(
+            btn_frame,
+            text="⏹  停止",
+            command=self._on_stop,
+            font=ctk.CTkFont(family="Microsoft YaHei UI", size=13),
+            fg_color=DANGER,
+            hover_color="#e5677e",
+            text_color="#1a1b26",
+            height=46,
+            width=110,
+            corner_radius=12,
+            state="disabled",
+        )
+        self.stop_btn.pack(side="left", padx=(0, 8))
+
+        self.open_btn = ctk.CTkButton(
+            btn_frame,
+            text="📂  数据文件夹",
+            command=self._on_open,
+            font=ctk.CTkFont(family="Microsoft YaHei UI", size=13),
+            fg_color=CARD_BG,
+            hover_color=("#2d2e45", "#2d2e45"),
+            text_color=TEXT,
+            height=46,
+            width=140,
+            corner_radius=12,
+            border_width=1,
+            border_color=TEXT_DIM,
+        )
+        self.open_btn.pack(side="left")
+
+        # Footer
+        ctk.CTkLabel(
+            self,
+            text="🔒 数据仅存储在本地，不会上传到任何服务器",
+            font=ctk.CTkFont(family="Microsoft YaHei UI", size=10),
+            text_color=TEXT_DIM,
+        ).pack(pady=(0, 16))
+
+    def _init_status(self):
+        cfg = load_user_config()
+        if cfg.get("USER_MID"):
+            self._append_log(f"已配置用户: MID={cfg['USER_MID']}")
+            self._append_log(f"默认收藏夹 ID: {cfg.get('DEFAULT_FAV_ID', '?')}")
+        else:
+            self._append_log("首次使用 - 点击「开始」扫码登录并自动配置")
+        self._append_log("数据文件目录: " + str(_base_dir()))
+        self._append_log("准备就绪")
+
+        if not _check_browsers():
+            self._append_log("⚠ Playwright 浏览器未安装，首次使用前请运行:")
+            self._append_log("  playwright install chromium")
+
+    def _set_status(self, text: str, color: str = TEXT):
+        self.status_label.configure(text=text, text_color=color)
+
+    def _set_progress(self, pct: int):
+        self.progress_bar.set(pct / 100)
+
+    def _append_log(self, msg: str):
+        self.log_box.configure(state="normal")
+        self.log_box.insert("end", msg + "\n")
+        self.log_box.see("end")
+        self.log_box.configure(state="disabled")
+
+    def _poll_queue(self):
         while True:
             try:
-                mtype, mval = log_q.get_nowait()
+                mtype, mval = self.log_q.get_nowait()
             except queue.Empty:
                 break
             if mtype == "log":
-                append_log(mval)
+                self._append_log(mval)
             elif mtype == "progress":
-                progress(*mval)
+                pct, msg = mval
+                self._set_progress(pct)
+                self._set_status(f"● {msg}", ACCENT)
             elif mtype == "done":
-                running = False
-                window["-START-"].update(disabled=False)
-                window["-STOP-"].update(disabled=True)
-                sg.popup_ok(
-                    "分类完成！请查看运行日志和 plan.json",
-                    title="\U0001f389 完成",
-                    keep_on_top=True,
-                )
+                self._finish(success=True)
             elif mtype == "error":
-                running = False
-                window["-START-"].update(disabled=False)
-                window["-STOP-"].update(disabled=True)
-                progress(0, f"错误: {str(mval)[:60]}")
-                sg.popup_error(
-                    f"运行出错:\n{mval}", title="错误", keep_on_top=True
-                )
+                self._set_status(f"● 错误: {str(mval)[:50]}", DANGER)
+                self._finish(success=False)
+        self.after(200, self._poll_queue)
 
-        if event in (sg.WIN_CLOSED, "Exit"):
-            break
+    def _finish(self, success: bool):
+        self.running = False
+        self.start_btn.configure(state="normal")
+        self.stop_btn.configure(state="disabled")
+        if success:
+            self._set_status("● 全部完成", SUCCESS)
+            self._show_toast("分类完成！请查看运行日志和 plan.json")
+        else:
+            self._set_status("● 运行出错", DANGER)
 
-        if event == "-START-" and not running:
-            runner = PipelineRunner(log_q, progress)
-            threading.Thread(target=runner.run, daemon=True).start()
-            running = True
-            window["-START-"].update(disabled=True)
-            window["-STOP-"].update(disabled=False)
-            append_log("━" * 50)
-            append_log("\U0001f680 启动分类流程...")
+    def _show_toast(self, msg: str):
+        toast = ctk.CTkToplevel(self)
+        toast.overrideredirect(True)
+        toast.attributes("-topmost", True)
+        toast.configure(fg_color=CARD_BG)
 
-        if event == "-STOP-" and running and runner:
-            runner.stop()
-            append_log("⏹ 正在停止...")
+        ctk.CTkLabel(
+            toast,
+            text=msg,
+            font=ctk.CTkFont(family="Microsoft YaHei UI", size=13),
+            text_color=TEXT,
+            padx=24,
+            pady=14,
+        ).pack()
 
-        if event == "-OPEN-":
-            os.startfile(str(_base_dir()))
+        self.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - toast.winfo_width()) // 2
+        y = self.winfo_y() + 80
+        toast.geometry(f"+{x}+{y}")
+        toast.after(2500, toast.destroy)
 
-    window.close()
+    def _on_start(self):
+        if self.running:
+            return
+        self.runner = PipelineRunner(self.log_q, self._progress_cb)
+        threading.Thread(target=self.runner.run, daemon=True).start()
+        self.running = True
+        self.start_btn.configure(state="disabled")
+        self.stop_btn.configure(state="normal")
+        self._append_log("━" * 50)
+        self._append_log("\U0001f680 启动分类流程...")
+
+    def _progress_cb(self, pct: int, msg: str):
+        self.log_q.put(("progress", (pct, msg)))
+
+    def _on_stop(self):
+        if self.runner and self.running:
+            self.runner.stop()
+            self._append_log("⏹ 正在停止...")
+
+    def _on_open(self):
+        os.startfile(str(_base_dir()))
+
+
+def main():
+    app = App()
+    app.mainloop()
 
 
 if __name__ == "__main__":

@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from bilibili_fav_classifier.apply import apply, _batch_move, _load_folders
 
@@ -189,12 +188,10 @@ class TestApply:
 
     def test_writes_apply_log(self, tmp_path, monkeypatch):
         """apply writes apply_log.json with results."""
-        import bilibili_fav_classifier.config as config_mod
-
         plan_file = _setup_test_env(tmp_path, monkeypatch, {
             "AI与编程技术": [{"id": 1, "bvid": "BV1"}],
         })
-        monkeypatch.setattr(config_mod, "APPLY_LOG_JSON", tmp_path / "apply_log.json")
+        log_file = tmp_path / "apply_log.json"
 
         http = FakeHttp({
             "https://api.bilibili.com/x/v3/fav/folder/created/list-all?up_mid=&platform=web": {
@@ -203,9 +200,9 @@ class TestApply:
             "https://api.bilibili.com/x/v3/fav/folder/add": {"code": 0, "data": {"id": 111}},
             "https://api.bilibili.com/x/v3/fav/resource/move": {"code": 0},
         })
-        apply(http, "csrf_test", plan_path=plan_file)
+        apply(http, "csrf_test", plan_path=plan_file, log_path=log_file)
 
-        log = json.loads((tmp_path / "apply_log.json").read_text(encoding="utf-8"))
+        log = json.loads(log_file.read_text(encoding="utf-8"))
         assert len(log) == 1
         assert log[0]["folder"] == "AI与编程技术"
         assert log[0]["moved"] == 1

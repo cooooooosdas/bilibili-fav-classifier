@@ -8,8 +8,6 @@ import asyncio
 import json
 import sys
 
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-
 from bilibili_fav_classifier.classify_core import ClassifyResult, autoclassify, genplan
 from bilibili_fav_classifier.collect import collect as _collect
 from bilibili_fav_classifier.config import (

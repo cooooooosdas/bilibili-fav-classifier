@@ -10,9 +10,12 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-
-from bilibili_fav_classifier.config import API_BASE
+from bilibili_fav_classifier.config import (
+    API_BASE,
+    ENRICH_CACHE_JSON,
+    FAVS_JSON,
+)
+from bilibili_fav_classifier.session import Session
 
 
 def _fetch_video_meta(bvid: str, http) -> dict:
@@ -46,9 +49,6 @@ def enrich_meta(
         favs_path: Path to favs.json. Defaults to config.FAVS_JSON.
         cache_path: Path to enrich_cache.json. Defaults to config.ENRICH_CACHE_JSON.
     """
-    from bilibili_fav_classifier.config import ENRICH_CACHE_JSON, FAVS_JSON
-    from bilibili_fav_classifier.session import Session
-
     if session is None:
         session = Session.load()
 
@@ -74,9 +74,11 @@ def enrich_meta(
     videos = favs.get("videos", [])
 
     need_fetch = []
+    no_bvid = 0
     for v in videos:
         bvid = v.get("bvid", "")
         if not bvid:
+            no_bvid += 1
             continue
         if bvid in cache:
             v["tname"] = cache[bvid].get("tname", v.get("tname", ""))
@@ -115,6 +117,8 @@ def enrich_meta(
     )
     print(f"==> 补充完成: {ok}/{len(need_fetch)} 个视频获取到标签/分区")
     print(f"==> 缓存已保存到 {cache_path}")
+    if no_bvid:
+        print(f"⚠ 跳过 {no_bvid} 个无 bvid 的视频")
 
     tname_counts: dict[str, int] = defaultdict(int)
     for v in videos:

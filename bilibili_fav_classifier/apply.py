@@ -7,8 +7,7 @@ from __future__ import annotations
 import json
 import sys
 import time
-
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+from pathlib import Path
 
 from bilibili_fav_classifier.config import (
     API_BASE,
@@ -59,6 +58,7 @@ def apply(
     http: HttpClient, csrf: str,
     only_folder: str | None = None,
     plan_path=None,
+    log_path=None,
 ) -> None:
     """Execute the classification plan: create folders and move videos.
 
@@ -67,17 +67,22 @@ def apply(
         csrf: CSRF token from cookies.
         only_folder: If set, only process this folder.
         plan_path: Override plan.json path (for testing).
+        log_path: Override apply_log.json path (for testing).
     """
-    from bilibili_fav_classifier.config import PLAN_JSON, APPLY_LOG_JSON
-
-    plan_file = plan_path or PLAN_JSON
+    plan_file = Path(plan_path) if plan_path is not None else PLAN_JSON
     if not plan_file.exists():
         print(f"未找到 {plan_file}, 请先 collect 并生成 plan.json")
         return
 
     plan = json.loads(plan_file.read_text(encoding="utf-8"))
+    if not isinstance(plan, dict):
+        print(f"错误: {plan_file} 格式不正确")
+        return
     do_move = plan.get("move", True)
     groups = plan.get("groups", {})
+    if not isinstance(groups, dict):
+        print(f"错误: plan.json['groups'] 格式不正确")
+        return
     total = sum(len(v) for v in groups.values())
     print(f"==> 计划: {len(groups)} 个文件夹, 共 {total} 个视频, move={do_move}")
 
@@ -178,11 +183,11 @@ def apply(
         })
         time.sleep(2)
 
-    from bilibili_fav_classifier.config import APPLY_LOG_JSON
-    APPLY_LOG_JSON.write_text(
+    log_file = Path(log_path) if log_path is not None else APPLY_LOG_JSON
+    log_file.write_text(
         json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     total_ok = sum(e.get("moved", 0) for e in log if isinstance(e, dict) and "moved" in e)
     total_fail = sum(e.get("failed", 0) for e in log if isinstance(e, dict) and "failed" in e)
-    print(f"\n==> 完成! 日志: {APPLY_LOG_JSON}")
+    print(f"\n==> 完成! 日志: {log_file}")
     print(f"==> 总计移动: {total_ok}/{total} 个视频 (失败 {total_fail})")

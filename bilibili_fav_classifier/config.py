@@ -34,7 +34,11 @@ def load_user_config() -> dict:
     """Load user config from config.json (created on first run)."""
     config_file = ROOT / "config.json"
     if config_file.exists():
-        return json.loads(config_file.read_text(encoding="utf-8"))
+        try:
+            return json.loads(config_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            print(f"警告: {config_file} 格式错误，使用默认配置")
+            return {}
     return {}
 
 

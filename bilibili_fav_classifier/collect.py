@@ -13,8 +13,6 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright
 
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-
 from bilibili_fav_classifier.config import (
     API_BASE,
     COOKIES_PATH,

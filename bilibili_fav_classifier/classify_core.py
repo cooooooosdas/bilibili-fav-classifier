@@ -8,8 +8,6 @@ import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-
 from bilibili_fav_classifier.rules import (
     keyword_classify,
     partition_match,

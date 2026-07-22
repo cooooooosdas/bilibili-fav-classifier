@@ -13,9 +13,13 @@ All other classification layers (tags → partition → keywords) are defined
 in rules.py and work independently of this file.
 """
 import json
+import sys
 from pathlib import Path
 
-ROOT = Path(__file__).parent
+if getattr(sys, "frozen", False):
+    ROOT = Path(sys.executable).parent
+else:
+    ROOT = Path(__file__).parent
 SEED_FILE = ROOT / "seed_mappings.json"
 
 

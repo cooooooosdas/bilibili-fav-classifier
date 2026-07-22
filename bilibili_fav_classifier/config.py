@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
-ROOT = Path(__file__).parent
+if getattr(sys, "frozen", False):
+    ROOT = Path(sys.executable).parent
+else:
+    ROOT = Path(__file__).parent
 
 COOKIES_PATH = ROOT / "cookies.json"
 FAVS_JSON = ROOT / "favs.json"

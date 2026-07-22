@@ -1,3 +1,7 @@
 playwright>=1.40
 requests>=2.28
+PySimpleGUI>=5.0
 pytest>=8.0
+
+# Build (optional, for creating standalone .exe)
+# pyinstaller>=6.0

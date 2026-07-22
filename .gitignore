@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Bilibili data (contains personal info)
+cookies.json
+favs.json
+plan.json
+apply_log.json
+auto_classified.json
+up_summary.json
+browser_data/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store

@@ -1,160 +1,32 @@
-"""Manual uploader-to-folder mappings.
+"""Seed (manual) uploader-to-folder mappings.
+
+This is your personal mapping table — edit it to assign specific UP主 to folders.
 
 Format: { "folder_name": [list of uploader names] }
 
-Edit this file to add your own mappings.
-Run 'python -m bilibili_fav_classifier autoclassify' after editing.
+When you run `autoclassify`, videos from listed uploaders go directly to
+the specified folder (highest accuracy).
+
+To add mappings, edit this file or use the save_mappings() function.
+
+All other classification layers (tags → partition → keywords) are defined
+in rules.py and work independently of this file.
 """
 import json
 from pathlib import Path
 
 ROOT = Path(__file__).parent
-MAPPING_FILE = ROOT / "up_mappings.json"
-
-DEFAULT_MAPPINGS = {
-    # --- AI & Programming ---
-    "AI与编程技术": [
-        "Google中国", "南-w-", "卡普迪姆", "小林绿子的怀中猫", "b站Clare", "xyspg",
-        "犬戎大充斥", "编程张无忌", "木乔_Mokio", "是嘉凡呀", "码士集团-马小菲呀",
-        "MiaoBox", "安枫的叶", "Mic聊架构-面试指导", "茶响", "羽过天晴啦啦啦",
-        "香草味的纳西妲喵", "Porter科技迷", "黑森鱼", "科技头版Pro", "HuskyBleh",
-        "后期老蒋", "致明笑笑", "天JIANG", "旮沓曼_gt428", "四夕小田木_",
-        "AI视频免费学", "徐某大侠", "贝塔珐", "光速敲代码的青丝", "林文冠AI",
-        "AI视频免费学", "ChatAI智能小助手", "DrDot", "挽手叙旧破",
-    ],
-    # --- Learning & Competition ---
-    "学习与竞赛": [
-        "科研水神大队长", "Winkle雪线", "陈哈哈Mark", "B站财经大学官方", "老奇好好奇",
-        "教语文的萱萱萱ww", "Ross-Ning", "载愁QAQ", "阿里小菜鸡一名", "计算机保研",
-        "Winter学长", "Roozenlz", "高光访谈录", "七页读书吧", "戴建业老师",
-        "名家讲堂", "自由辩孤勇者", "3Blue1Brown", "鹤吱菌", "正儿八经的陈老师",
-        "哲学有用论", "考研英语大雁", "我是小郭同学aaa", "一只萧包子", "Peppystar",
-        "芝麻馅的干货铺", "硕博无忧论文", "竹下小布", "框框看升学", "林默琛",
-        "大师们的写作课", "暴叔讲留学", "乐了哥_", "Michael范同学", "高盛元",
-        "SteveMould", "耿同学讲故事", "经济研究室-祈祷", "文学罐头", "童哲的万门教育",
-        "阿丁的英语课堂", " FredTao高考政治", "甜老师在笑", "猴博士爱讲课",
-        "Chrystal4ever", "南有风音", "麻辣烫", "无泽加勉", "无忧考吧",
-        "雁中雁", "政治 Eric", "大物理Electronics", "Stanley老师", "阿月读诗",
-        "生物做题家", "平盖尔", "辣椒love小小平", "秀色可餐工作室",
-        "良才教育政治", "初中语文studio", "万唯中考", "晓艳初中高中英语",
-        "化学小莫", "边一白", "Joe教英语", "沈健中医", "板书大叔",
-        "猴博士", "小平酱说公考", "章进考研", "星痴_Daily_", "正数课堂",
-    ],
-    # --- Gaming & Anime ---
-    "游戏与动漫": [
-        "皇室战争ClashRoyale", "绝区零第一可爱兔宝", "清竹莫叶", "小智乃敲可爱",
-        "-胡莱克修斯-", "在下璃墨", "与优树", "超级小龙恐", "悠悠球琛总",
-        "萝太永不破防", "AkiraKu-", "七七和豆豆教做菜", "中国足球队", "NOOB酱",
-        "王者荣耀浪恬", "_傑傑菌_", "绝区零", "逆战未来", "CnGal资料站",
-        "巴老师的小号", "TheGreatStill", "超标教主花式", "浅梦-Dream", "牢大爱持矢",
-        "绝区零第一可爱兔宝", "企鹅带带北极熊", "虎牙王者荣耀", "王楚文儿",
-        "米奇妙妙屋Ray", "22和33", "GYAnimation", "克利咕咕兰", "梦轩dada",
-        "猫猫想吃见手青", "优衣_ユイ", "七月的独白", "Flexing", "Supercell游戏",
-        "村民徐尼玛", "混乱粉笔", "赛尔号", "Daniel-松原草音", "晓月の凪",
-        "一个爱吃的猪", "凌泽", "熊出没BoonieBears", "粥粥温迪", "窝头 nicer",
-        "LexBurner", "胡桃日记", "宫本狗头", "英雄联盟", "英雄联盟官方",
-        "云顶之弈", "幻塔", "崩坏3", "原神", "米哈游",
-        "汪小暴", "不太硬核", "五五开", "传奇怪兽宇宙", "流萤ovo",
-        "田所浩二", "游研社", "机核网", "橙心资讯", "游戏葡萄",
-        "包子入侵", "在下小神", "小潮team", "动漫贩", "Anime Tamashii",
-        "夜鸦工作室", "AO美术", "板绘教程", "原神攻略", "王者荣耀KPL",
-    ],
-    # --- Sports & Fitness ---
-    "体育": [
-        "中国足球队", "ZZU胡月", "嘉期未央", "戴夫健身", "健身李教", "闫帅奇",
-        "乒来将挡", "AresFly_", "乌龙茶不加茶-", "鸡胸肉西兰花减脂餐", "寒沁朝悦享",
-        "被水淹死的几条鱼", "孙石磊乒乓", "Leon是个莽夫", "弧圈虫",
-        "右手许昕", "御鹿YLU", "郭焱_炎上乒乓", "乒乓球杨教练", "乒乓网pingpangwang",
-        "笛笛Diddy", "花滑比赛", "羽毛球", "篮球技巧教学", "跑步", "马拉松",
-        "街健", "篮球", "足球", "电竞", "B站体育",
-    ],
-    # --- Music ---
-    "音乐": [
-        "空想Caesar", "方块识曲", "Synthet官方字幕组", "雨晴超会教唱歌",
-        "张卡斯", "聆听最好的世界", "冬瓜Key_P", "挽风丶Sama", "路人乙ッ",
-        "有见有鱼没有喻", "黑糖音乐秀", "广西小音", "贱歪", "棕熊音乐库",
-        "炽夏夜之心", "彻喵", "茶理理理子", "Chrystal4ever", "HQM-Hugo魁Music",
-        "谢怢", "莫扎特进行曲", "一禅小和尚", "Mr_BlackWhite", "路灰气球z",
-        "Ayase-YOASOBI", "雲雀丘花屋敷", "夜北鸢枫", "樱井凛音", "珠海童年树童声合唱团",
-        "根号七_seven", "彭休休教唱歌", "SealWu吴一凡", "中威子ww",
-        "栗子不是粟子咧", "我们的乐队", "陶喆", "周杰伦", "林俊杰",
-        "张学友", "五月天", "邓紫棋", "华晨宇", "薛之谦",
-    ],
-    # --- Emotion & Copywriting ---
-    "情感与文案": [
-        "陈嘉伦整个路人", "争当冲向食堂第一名", "邓了个登", "我爱吃派大星",
-        "刘大涛丨实用心理学", "吟游诗人基德", "y极简", "张老师真知灼见",
-        "一起做世界的学生", "他的日常时光", "人间帧像", "孤独的xx", "蛇杖社长",
-        "星雨Starrain", "Rofitter", "艾梦云兮", "有个鹏友-", "呼唤少女",
-        "罗老师哲学人生", "Reseance", "凌霄飞渡一剑天", "花正开人不在",
-        "复苏呼吸姬", "好奇的珜", "复苏呼吸姬", "花正开人不在",
-        "GoldenSpiderAI", "木头与马尾_", "做人别太浪-", "小花铧",
-        "话题剧场", "被迫营业的鱼干", "杂乱无章MessUp", "灵魂收割刀",
-        "戏很多的金兑", "非著名搞笑up", "弱智吧TV", "Maki的完美算术教室",
-        "椰子ovo-", "钢铁般的兔子", "婉O呐", "想活着当尸体", "Tobbbbby888",
-        "神奇的老皮", "OldSao老骚", "是老胡没错", "王暖胃", "军师阿刘",
-        "花久-ik", "锦书致南辞", "影岛阿天", "大雁语录", "千秋咪",
-        "衫川流影", "改良大蓝猫", "余音绕星轨", "老猫乔諵", "一点即兴",
-        "WY的灯塔", "李宗恒_无广纯享", "冰言冰语ing", "没有开的开水",
-        "困困小番茄呀", "人类心理研究所", "醉颜梦星河", "大冰夜话ing",
-        "殷秋染", "刀月你好香", "ItzReaLoK_", "第103秒", "是你的安佳佳呀",
-        "黄金右手6", "录取通知舒", "脱缰凯Kk", "MC小决", "一禅小和尚",
-        "绫野茶子", "薄郎宁", "Adam陈老丝", "纠结万事君", "夏露露Ruru",
-        "方北尘", "深海_Deep", "彬彬找乐子", "SKYE魏", "银桑的万视屋",
-        "千百度", "知心者联盟", "一纸短书", "心理学了没", "苏星河",
-        "九条可怜", "温柔颜究所", "小咖附体", "一禅小和尚", "情感文案馆",
-    ],
-    # --- History & Politics ---
-    "历史与时政": [
-        "东晓莫早", "小约翰可汗", "大象放映室", "独孤轩辕策", "环球时报",
-        "白宫日记", "张维为", "RT今日俄罗斯", "北斗导航Compass", "半饱猪",
-        "种花家的阿燃", "全球宏观FICC", "浏览星", "壹帧cut", "卢克文工作室",
-        "观视频工作室", "有机社会", "有山先生", "申启典", "乌鸦校尉",
-        " konstellar", "波士顿圆脸", "王骁Albert", "马督工", "沈逸老师",
-        "听听人家怎么说", "历史调研室", "沙盘上的战争", "啊粥粥啊粥",
-        "唠点历史", "小Lin说", "郭杰瑞", "我是EyeOpener", "回形针PaperClip",
-        "柴知道", "混乱博物馆", "科普中国", "新华社", "央视新闻",
-        "人民日报", "观察者网", "澎湃新闻", "财新网",
-    ],
-    # --- Life & Society ---
-    "生活与社会": [
-        "南京大学", "何同学工作室", "峰乐一", "清华大学", "清华大学新闻学院",
-        "于谦", "韩子夜-", "kdrant35", "小白聊驾驶", "粉毛科普",
-        "蓝不过海呀", "热门情报局", "陈曦Stanley_", "风尘工作室WDstudio",
-        "章鱼哥的数码生活", "数码精灵喵", "某白蜀黍White", "数码闲聊日记",
-        "马达加斯加腌鱼", "清华豆师", "黑猫学剪辑", "不知名益",
-        "风霜息_ITuristy", "Jack要加油lu", "肖食儿", "酷布里克AKA酷哥",
-        "肤浅-Q2", "巨鹏外卖", "喜欢拍照的皮皮", "清华豆师",
-        "长片短解", "不送外卖的硕士老范", "牛马中的牛11", "施词家",
-        "模玩奶爸十三", "历历做东西", "北京大学", "是嘉凡呀",
-        "惠普官方旗舰店", "黑豹懂车-", "老黄数码回收", "老煎蛋啊",
-        "清华大学", "中国科学院大学", "北京大学", "复旦大学",
-        "浙江大学", "上海交通大学", "南京大学", "武汉大学",
-        "无穷小亮的科普日常", "硬核的半佛仙人", "衣戈猜想",
-        "老爸评测", "罗翔说刑法", "所长林超", "李永乐老师",
-        "李永乐老师", "回形针PaperClip", "科普中国", "科技公元",
-        "森纳映画", "智能帮", "省流主任", "万万没想到",
-        "陈翔六点半", "papi酱", "大祥哥来了", "记录生活的蛋黄派",
-        "假美食po主", "盗月社食遇记", "绵羊料理", "曼食慢语",
-        "小高姐", "王刚", "美食作家王刚", "阿远",
-        "华农兄弟", "李子柒", "滇西小哥", "野食小哥",
-        "导演小策", "陈翔六点半", "万合天宜", "土豆诚",
-    ],
-}
+SEED_FILE = ROOT / "seed_mappings.json"
 
 
-def load_mappings() -> dict[str, list[str]]:
-    if MAPPING_FILE.exists():
-        data = json.loads(MAPPING_FILE.read_text(encoding="utf-8"))
-        print(f"==> 已加载手动映射: {MAPPING_FILE}")
-        return data
-    print("==> 未找到 up_mappings.json，使用内置默认映射")
-    return DEFAULT_MAPPINGS
+def load_seed_mappings() -> dict[str, list[str]]:
+    if SEED_FILE.exists():
+        return json.loads(SEED_FILE.read_text(encoding="utf-8"))
+    return {}
 
 
-def save_mappings(mappings: dict):
-    MAPPING_FILE.write_text(
-        json.dumps(mappings, ensure_ascii=False, indent=2),
-        encoding="utf-8",
+def save_seed_mappings(mappings: dict[str, list[str]]):
+    SEED_FILE.write_text(
+        json.dumps(mappings, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    print(f"==> 映射已保存到 {MAPPING_FILE}")
+    print(f"==> 种子映射已保存到 {SEED_FILE}")

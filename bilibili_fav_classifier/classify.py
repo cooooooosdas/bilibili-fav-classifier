@@ -1,11 +1,14 @@
-"""B站收藏夹智能分类工具 — 三阶段流程:
+"""B站收藏夹智能分类工具
 
-  1. collect    — 拉取默认收藏夹的全部视频, 保存到 favs.json
-  2. autoclassify — 自动分类 (手动映射 + 关键词匹配), 生成 plan.json
-  3. apply      — 创建收藏夹并移动视频
+流程:
+  1. collect         拉取默认收藏夹全部视频（含分区和标签元数据）
+  2. enrich_meta     根据 bvid 补充每个视频的分区(tname)和标签(tag)
+  3. autoclassify    四层分类: 标签 → 分区 → UP映射 → 标题关键词
+  4. apply           创建收藏夹并移动视频
 
 Usage:
   python -m bilibili_fav_classifier collect
+  python -m bilibili_fav_classifier enrich_meta    # 可选: 补充标签/分区
   python -m bilibili_fav_classifier autoclassify
   python -m bilibili_fav_classifier apply
 """
@@ -19,7 +22,6 @@ from collections import defaultdict
 from pathlib import Path
 
 from playwright.async_api import async_playwright
-
 import requests
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -31,11 +33,18 @@ from bilibili_fav_classifier.config import (
     COOKIES_PATH,
     DEFAULT_FAV_ID,
     FAVS_JSON,
-    MANUAL_MAP_JSON,
     PLAN_JSON,
     USER_MID,
 )
-from bilibili_fav_classifier.mappings import load_mappings
+from bilibili_fav_classifier.rules import (
+    TAG_RULES,
+    KEYWORD_RULES,
+    PARTITION_RULES,
+    load_seed_mappings,
+    keyword_classify,
+    partition_match,
+    tag_match,
+)
 
 _CHROME_CANDIDATES = [
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -92,15 +101,12 @@ async def wait_for_login(page, timeout: int = 180):
 async def collect():
     async with async_playwright() as p:
         browser = await p.chromium.launch(
-            headless=False,
-            executable_path=CHROME_PATH,
-            args=BROWSER_ARGS,
+            headless=False, executable_path=CHROME_PATH, args=BROWSER_ARGS,
         )
         context = await browser.new_context()
         page = await context.new_page()
         await page.goto(
-            f"https://space.bilibili.com/{USER_MID}/favlist"
-            f"?fid={DEFAULT_FAV_ID}",
+            f"https://space.bilibili.com/{USER_MID}/favlist?fid={DEFAULT_FAV_ID}",
             wait_until="domcontentloaded",
         )
         await asyncio.sleep(3)
@@ -145,7 +151,7 @@ async def collect():
                     + "&ps=20&platform=web&order=mtime"
                 );
                 const j = await r.json();
-                if (j.code !== 0) {{ all.push({{error: true, code: j.code, page: pn}}); break; }}
+                if (j.code !== 0) {{ all.push({{error:true,code:j.code,page:pn}}); break; }}
                 const medias = j.data?.medias || [];
                 all.push(...medias);
                 if (!j.data?.has_more || medias.length === 0) break;
@@ -174,6 +180,9 @@ async def collect():
                 ),
                 "upper": upper.get("name", ""),
                 "upper_mid": upper.get("mid"),
+                # These will be populated by enrich_meta later
+                "tname": it.get("tname", ""),
+                "tags": it.get("tag", []),
             })
 
         FAVS_JSON.write_text(
@@ -191,7 +200,7 @@ async def collect():
         )
         print(f"==> 已保存到 {FAVS_JSON}")
 
-        # Generate UP summary for manual mapping
+        # Generate UP summary
         up_map: dict[str, list[str]] = defaultdict(list)
         for v in videos:
             up = v.get("upper") or "未知UP"
@@ -206,209 +215,248 @@ async def collect():
             json.dumps({"total": len(videos), "uppers": uppers}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        print("==> 下一步: 运行 autoclassify 自动分类, 再运行 apply")
+        print(f"==> 已生成 {summary_path} ({len(uppers)} 个UP主)")
+        print("==> 下一步: 运行 enrich_meta 补充标签/分区, 再 autoclassify")
         await context.close()
         await browser.close()
 
 
-# ──────────────────────── API helpers ────────────────────────
+# ──────────────────────── Enrich meta ────────────────────────
 
 
-def _post_via_page(page, url: str, data: dict, csrf: str, retries: int = 3):
-    if csrf:
-        data["csrf"] = csrf
-    js = """async ([url, data, retries]) => {
-        const toForm = (d) => {
-            const p = new URLSearchParams();
-            for (const k in d) {
-                const v = d[k];
-                if (Array.isArray(v)) v.forEach(x => p.append(k, x));
-                else p.append(k, v);
-            }
-            return p;
-        };
-        const body = toForm(data);
-        for (let i = 0; i < retries; i++) {
-            try {
-                const r = await fetch(url, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'},
-                    credentials: 'include',
-                    body,
-                });
-                const ct = r.headers.get('content-type') || '';
-                if (!ct.includes('json')) return {_error: true, _status: r.status, _ctype: ct};
-                const j = await r.json();
-                if (j.code === -999 || j.code === -101)
-                    return {_error: true, _status: r.status, _code: j.code};
-                return j;
-            } catch (e) {
-                if (i === retries - 1) return {_error: true, _msg: e.message};
-                await new Promise(r => setTimeout(r, 800));
-            }
-        }
-    }"""
-    result = await page.evaluate(js, [url, data, retries])
-    if result and result.get("_error"):
-        raise RuntimeError(
-            f"API error: status={result.get('_status')}"
-            f" code={result.get('_code')} ctype={result.get('_ctype')}"
-            f" msg={result.get('_msg')}"
+def _get_session() -> tuple[dict, str]:
+    """Load cookies and csrf for direct API calls."""
+    cookies_raw = json.loads(COOKIES_PATH.read_text(encoding="utf-8"))
+    cookies = {c["name"]: c["value"] for c in cookies_raw}
+    csrf = cookies.get("bili_jct", "")
+    if not csrf:
+        raise ValueError("No bili_jct in cookies. Re-run collect.")
+    return cookies, csrf
+
+
+def _fetch_video_meta(bvid: str, cookies: dict) -> dict:
+    """Fetch video detail to get tname (partition) and tags."""
+    headers = {
+        "Referer": "https://www.bilibili.com/",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+            " AppleWebKit/537.36 (KHTML, like Gecko)"
+            " Chrome/120.0.0.0 Safari/537.36"
+        ),
+    }
+    try:
+        r = requests.get(
+            f"{API_BASE}/x/web-interface/view?bvid={bvid}",
+            cookies=cookies, headers=headers, timeout=15,
         )
-    return result
+        j = r.json()
+        if j.get("code") != 0:
+            return {}
+        data = j.get("data", {})
+        tags = [t.get("tag_name", "") for t in data.get("tags", [])]
+        return {
+            "tname": data.get("tname", ""),
+            "tags": tags,
+        }
+    except Exception:
+        return {}
 
 
-async def create_folder(page, title: str, csrf: str):
-    return await _post_via_page(
-        page, f"{API_BASE}/x/v3/fav/folder/add",
-        {"title": title, "intro": "", "privacy": 0, "cover": ""},
-        csrf,
-    )
+def enrich_meta():
+    """Supplement tname and tags for each video by calling the video detail API.
 
-
-# ──────────────────────── Classification rules ────────────────────────
-
-KEYWORD_RULES: list[tuple[str, str]] = [
-    (
-        "编程/开发/技术/AI/代码/算法/Claude/Cursor/Coze/Agent"
-        "/Python/Java/C++/前端/后端/框架/引擎/软件/程序"
-        "/VSCode/Git/Linux/Docker/API/GitHub/程序员/后端/前端",
-        "AI与编程技术",
-    ),
-    (
-        "算法/竞赛/ACM/蓝桥杯/数模/建模/数学/高数/线代/概率"
-        "/论文/科研/SCI/英语/四级/六级/CET/雅思/托福"
-        "/考研/期末/复习/课件/物理/化学/生物/经管",
-        "学习与竞赛",
-    ),
-    (
-        "游戏/GTA/原神/三角洲/我的世界/实况/攻略/Steam"
-        "/塞尔达/黑神话/王者/和平精英/实况/LOL/CSGO/MC",
-        "游戏与动漫",
-    ),
-    (
-        "动漫/新番/番剧/鬼灭/咒术/进击的巨人/间谍过家家/崩坏",
-        "游戏与动漫",
-    ),
-    ("健身/跑步/减肥/运动/KEEP/肌肉/拉伸/瑜伽", "体育"),
-    (
-        "音乐/翻唱/钢琴/吉他/古筝/日文歌/歌词/NIGHT DANCER"
-        "/歌曲/演唱/MV/BGM/纯音乐",
-        "音乐",
-    ),
-    (
-        "情感/文案/治愈/感悟/人生/爱情/故事/遗憾/告别"
-        "/EMO/伤感/emo",
-        "情感与文案",
-    ),
-    (
-        "历史/二战/苏联/蒋介石/国民党/近代史/朝代"
-        "/时政/国际/俄乌/特朗普/访华/地缘政治/资本家",
-        "历史与时政",
-    ),
-    ("美食/做饭/食谱/探店/深夜食堂/厨师/烘焙", "生活与社会"),
-    (
-        "旅行/生活/日常/Vlog/大学生/毕业/职场/社畜"
-        "/科普/知识/冷知识/科学/物理/化学/纪录片"
-        "/影视/电影/解说/影评/Netflix/汽车/数码/测评"
-        "/手机/电脑/硬件/搞笑/整活/鬼畜/沙雕/离谱",
-        "生活与社会",
-    ),
-]
-
-
-def keyword_classify(title: str) -> str | None:
-    t = (title or "").lower()
-    for keywords, folder in KEYWORD_RULES:
-        for kw in keywords.split("/"):
-            if kw.lower() in t:
-                return folder
-    return None
-
-
-# ──────────────────────── Auto classify ────────────────────────
-
-
-def autoclassify():
+    Uses a simple file-based cache (enrich_cache.json) to avoid re-fetching.
+    """
     if not FAVS_JSON.exists():
         print("==> 请先运行 collect")
         return
 
+    cache_path = Path(__file__).parent / "enrich_cache.json"
+    cache: dict[str, dict] = {}
+    if cache_path.exists():
+        cache = json.loads(cache_path.read_text(encoding="utf-8"))
+
     favs = json.loads(FAVS_JSON.read_text(encoding="utf-8"))
-    manual = load_mappings()
+    videos = favs.get("videos", [])
+    cookies, _ = _get_session()
+
+    need_fetch = []
+    for v in videos:
+        bvid = v.get("bvid", "")
+        if not bvid:
+            continue
+        if bvid in cache:
+            v["tname"] = cache[bvid].get("tname", v.get("tname", ""))
+            v["tags"] = cache[bvid].get("tags", v.get("tags", []))
+        else:
+            need_fetch.append(v)
+
+    if not need_fetch:
+        print(f"==> 全部 {len(videos)} 个视频已有缓存, 无需补充")
+        return
+
+    print(f"==> 需要补充 {len(need_fetch)} 个视频的标签/分区...")
+
+    ok = 0
+    for i, v in enumerate(need_fetch):
+        bvid = v.get("bvid", "")
+        meta = _fetch_video_meta(bvid, cookies)
+        if meta:
+            cache[bvid] = meta
+            v["tname"] = meta.get("tname", v.get("tname", ""))
+            v["tags"] = meta.get("tags", v.get("tags", []))
+            ok += 1
+        if (i + 1) % 20 == 0:
+            print(f"    进度: {i + 1}/{len(need_fetch)} (命中 {ok})")
+        time.sleep(0.5)
+
+    # Save cache
+    cache_path.write_text(
+        json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    FAVS_JSON.write_text(
+        json.dumps(favs, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"==> 补充完成: {ok}/{len(need_fetch)} 个视频获取到标签/分区")
+    print(f"==> 缓存已保存到 {cache_path}")
+
+    # Show partition distribution
+    tname_counts: dict[str, int] = defaultdict(int)
+    for v in videos:
+        if v.get("tname"):
+            tname_counts[v["tname"]] += 1
+    if tname_counts:
+        print("\n==> 分区分布:")
+        for name, cnt in sorted(tname_counts.items(), key=lambda x: -x[1]):
+            print(f"    {name}: {cnt}")
+
+
+# ──────────────────────── Classification ────────────────────────
+
+
+def classify_video(video: dict, up_to_folder: dict[str, str]) -> str:
+    """Classify a single video using four layers.
+
+    Priority: tag > partition > UP mapping > title keyword > "其他"
+    """
+    title = video.get("title", "")
+    tags = video.get("tags") or []
+    tname = video.get("tname", "")
+    upper = video.get("upper") or ""
+
+    # Layer 1: Tag matching (most precise)
+    result = tag_match(tags)
+    if result:
+        return result
+
+    # Layer 2: Partition matching (official Bilibili category)
+    result = partition_match(tname)
+    if result:
+        return result
+
+    # Layer 3: UP mapping (personal, most accurate for known creators)
+    if upper in up_to_folder:
+        return up_to_folder[upper]
+
+    # Layer 4: Title keyword matching
+    result = keyword_classify(title)
+    if result:
+        return result
+
+    return "其他"
+
+
+def autoclassify():
+    if not FAVS_JSON.exists():
+        print("==> 请先运行 collect（和可选的 enrich_meta）")
+        return
+
+    favs = json.loads(FAVS_JSON.read_text(encoding="utf-8"))
+    seed_map = load_seed_mappings()
 
     # Flatten to up → folder lookup
     up_to_folder: dict[str, str] = {}
-    for folder, ups in manual.items():
+    for folder, ups in seed_map.items():
         for up in ups:
             up_to_folder[up] = folder
 
-    # Group by uploader
-    up_vids: dict[str, list[dict]] = defaultdict(list)
-    for v in favs.get("videos", []):
-        up = v.get("upper") or "未知UP"
-        up_vids[up].append(v)
-
-    groups: dict[str | None, list[dict]] = {}
+    groups: dict[str, list[dict]] = defaultdict(list)
     unmatched_ups: dict[str, list[str]] = {}
+    tag_hits = 0
+    partition_hits = 0
+    up_hits = 0
+    keyword_hits = 0
 
-    for up, vids in up_vids.items():
-        if up in up_to_folder:
-            folder = up_to_folder[up]
+    for v in favs.get("videos", []):
+        folder = classify_video(v, up_to_folder)
+        groups[folder].append(v)
+
+        # Track which layer matched for diagnostics
+        tags = v.get("tags") or []
+        tname = v.get("tname", "")
+        upper = v.get("upper") or ""
+        if tag_match(tags):
+            tag_hits += 1
+        elif partition_match(tname):
+            partition_hits += 1
+        elif upper in up_to_folder:
+            up_hits += 1
+        elif keyword_classify(v.get("title", "")):
+            keyword_hits += 1
         else:
-            folder = None
-            for v in vids:
-                kf = keyword_classify(v.get("title", ""))
-                if kf:
-                    folder = kf
-                    break
-            if not folder:
-                folder = "其他"
-                unmatched_ups[up] = [v.get("title", "") for v in vids[:3]]
-        groups.setdefault(folder, []).extend(vids)
+            upper_key = upper or "未知UP"
+            unmatched_ups.setdefault(upper_key, [])
+            unmatched_ups[upper_key].append(v.get("title", ""))
 
+    # Save unmatched for reference
     if unmatched_ups:
+        AUTO_CLASSIFY_JSON = Path(__file__).parent / "auto_classified.json"
         AUTO_CLASSIFY_JSON.write_text(
             json.dumps(unmatched_ups, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        print(
-            f"==> 未匹配UP ({len(unmatched_ups)} 个)"
-            f" 已保存到 {AUTO_CLASSIFY_JSON}"
-        )
+        print(f"==> 未匹配UP ({len(unmatched_ups)} 个) 已保存到 auto_classified.json")
 
+    # Write plan
     plan = {
         "move": True,
         "groups": {
             folder: [{"id": v.get("id"), "bvid": v.get("bvid")} for v in vids]
             for folder, vids in groups.items()
-            if folder
         },
     }
     PLAN_JSON.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    total = sum(len(v) for v in groups.values() if v)
-    print(f"==> 已生成 {PLAN_JSON}: {len(groups)} 个文件夹, 共 {total} 个视频")
-    for f, vids in sorted(groups.items(), key=lambda x: -len(x[1]) if x[1] else 0):
-        print(f"    - {f or '(跳过)'}: {len(vids)}")
+    total = sum(len(v) for v in groups.values())
+    print(f"\n==> 已生成 {PLAN_JSON}: {len(groups)} 个文件夹, 共 {total} 个视频")
+    print(f"\n==> 分类命中统计:")
+    print(f"    标签匹配:    {tag_hits}")
+    print(f"    分区匹配:    {partition_hits}")
+    print(f"    UP主映射:    {up_hits}")
+    print(f"    关键词匹配:  {keyword_hits}")
+    print(f"    归入'其他':  {len(unmatched_ups)} 个UP主")
+    print()
+    for f, vids in sorted(groups.items(), key=lambda x: -len(x[1])):
+        print(f"    - {f}: {len(vids)}")
     if unmatched_ups:
         sample = list(unmatched_ups.keys())[:10]
         suffix = "..." if len(unmatched_ups) > 10 else ""
-        print(f"==> 归入'其他'的UP主: {sample}{suffix}")
-    print("==> 请检查 plan.json, 确认后运行 apply")
+        print(f"\n==> 归入'其他'的UP主: {sample}{suffix}")
+        print(f"    (在 up_mappings.json 中添加映射可减少'其他')")
+    print("\n==> 请检查 plan.json, 确认后运行 apply")
 
 
 def genplan():
-    """Simpler plan generator — manual mapping only, no keyword fallback."""
+    """Simpler plan — manual UP mapping only, no keyword/tag/partition fallback."""
     if not FAVS_JSON.exists():
         print("==> 请先运行 collect")
         return
 
     favs = json.loads(FAVS_JSON.read_text(encoding="utf-8"))
-    manual = load_mappings()
+    seed_map = load_seed_mappings()
 
     up_to_folder: dict[str, str] = {}
-    for folder, ups in manual.items():
+    for folder, ups in seed_map.items():
         for up in ups:
             up_to_folder[up] = folder
 
@@ -435,9 +483,7 @@ def genplan():
     if unmatched:
         sample = sorted(unmatched)[:20]
         suffix = "..." if len(unmatched) > 20 else ""
-        print(
-            f"==> 未匹配UP主 ({len(unmatched)}), 已归入'其他': {sample}{suffix}"
-        )
+        print(f"==> 未匹配UP主 ({len(unmatched)}): {sample}{suffix}")
     print("==> 请检查 plan.json, 确认后运行 apply")
 
 
@@ -576,7 +622,7 @@ def apply(only_folder: str | None = None):
                 if result.get("_waf_html"):
                     print(
                         f"    [{folder_name}] 批次 {batch_start // BATCH_SIZE + 1}"
-                        f" WAF限流 (status={result.get('_status')}), 冷却60秒...",
+                        f" WAF限流, 冷却60秒...",
                         flush=True,
                     )
                     time.sleep(60)
@@ -656,6 +702,8 @@ def main():
     cmd = sys.argv[1]
     if cmd == "collect":
         asyncio.run(collect())
+    elif cmd == "enrich_meta":
+        enrich_meta()
     elif cmd == "autoclassify":
         autoclassify()
     elif cmd == "genplan":

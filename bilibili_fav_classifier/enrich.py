@@ -10,26 +10,21 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-import requests
-
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from bilibili_fav_classifier.config import (
-    API_BASE,
-    ENRICH_CACHE_JSON,
-    FAVS_JSON,
-)
-from bilibili_fav_classifier.session import Session
+from bilibili_fav_classifier.config import API_BASE
 
 
-def _fetch_video_meta(bvid: str, session: Session) -> dict:
-    """Fetch video detail to get tname (partition) and tags."""
+def _fetch_video_meta(bvid: str, http) -> dict:
+    """Fetch video detail to get tname (partition) and tags.
+
+    Args:
+        bvid: Video BVID.
+        http: HttpClient instance (from session.http()).
+    """
     try:
-        r = requests.get(
-            f"{API_BASE}/x/web-interface/view?bvid={bvid}",
-            cookies=session.cookies, headers=session.headers, timeout=15,
-        )
-        j = r.json()
+        r = http.get(f"{API_BASE}/x/web-interface/view?bvid={bvid}")
+        j = r
         if j.get("code") != 0:
             return {}
         data = j.get("data", {})
@@ -39,25 +34,43 @@ def _fetch_video_meta(bvid: str, session: Session) -> dict:
         return {}
 
 
-def enrich_meta(session: Session | None = None) -> None:
+def enrich_meta(
+    session=None,
+    favs_path=None,
+    cache_path=None,
+) -> None:
     """Supplement tname and tags for each video by calling the video detail API.
 
     Args:
-        session: Authenticated session. If None, loads from disk.
+        session: Authenticated Session. If None, loads from disk.
+        favs_path: Path to favs.json. Defaults to config.FAVS_JSON.
+        cache_path: Path to enrich_cache.json. Defaults to config.ENRICH_CACHE_JSON.
     """
-    if not FAVS_JSON.exists():
-        print("==> 请先运行 collect")
-        return
+    from bilibili_fav_classifier.config import ENRICH_CACHE_JSON, FAVS_JSON
+    from bilibili_fav_classifier.session import Session
 
     if session is None:
         session = Session.load()
 
-    cache_path = ENRICH_CACHE_JSON
+    http = session.http()
+
+    if favs_path is None:
+        favs_path = FAVS_JSON
+    if cache_path is None:
+        cache_path = ENRICH_CACHE_JSON
+
+    favs_path = Path(favs_path)
+    cache_path = Path(cache_path)
+
+    if not favs_path.exists():
+        print("==> 请先运行 collect")
+        return
+
     cache: dict[str, dict] = {}
     if cache_path.exists():
         cache = json.loads(cache_path.read_text(encoding="utf-8"))
 
-    favs = json.loads(FAVS_JSON.read_text(encoding="utf-8"))
+    favs = json.loads(favs_path.read_text(encoding="utf-8"))
     videos = favs.get("videos", [])
 
     need_fetch = []
@@ -80,7 +93,7 @@ def enrich_meta(session: Session | None = None) -> None:
     ok = 0
     for i, v in enumerate(need_fetch):
         bvid = v.get("bvid", "")
-        meta = _fetch_video_meta(bvid, session)
+        meta = _fetch_video_meta(bvid, http)
         if meta:
             cache[bvid] = meta
             v["tname"] = meta.get("tname", v.get("tname", ""))
@@ -97,7 +110,7 @@ def enrich_meta(session: Session | None = None) -> None:
     cache_path.write_text(
         json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    FAVS_JSON.write_text(
+    favs_path.write_text(
         json.dumps(favs, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     print(f"==> 补充完成: {ok}/{len(need_fetch)} 个视频获取到标签/分区")

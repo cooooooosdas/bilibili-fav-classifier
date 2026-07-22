@@ -1,28 +1,29 @@
 """Classification orchestration: classify_video, autoclassify, genplan.
 
-Pure logic — no CLI, no I/O orchestration beyond reading favs.json and writing plan.json.
+Pure logic — no CLI, no file I/O. Callers provide data and receive results.
 """
 from __future__ import annotations
 
-import json
 import sys
 from collections import defaultdict
-from pathlib import Path
+from dataclasses import dataclass, field
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from bilibili_fav_classifier.config import (
-    AUTO_CLASSIFY_JSON,
-    FAVS_JSON,
-    PLAN_JSON,
-    load_user_config,
-)
-from bilibili_fav_classifier.mappings import load_seed_mappings
 from bilibili_fav_classifier.rules import (
     keyword_classify,
     partition_match,
     tag_match,
 )
+
+
+@dataclass
+class ClassifyResult:
+    """Result of autoclassify — contains all data needed for output."""
+    groups: dict[str, list[dict]] = field(default_factory=dict)
+    layer_counts: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    unmatched_ups: dict[str, list[str]] = field(default_factory=dict)
+    total: int = 0
 
 
 def classify_video(video: dict, up_to_folder: dict[str, str]) -> tuple[str, str]:
@@ -53,15 +54,19 @@ def classify_video(video: dict, up_to_folder: dict[str, str]) -> tuple[str, str]
     return "其他", "fallback"
 
 
-def autoclassify():
-    """Classify all videos using 4-layer matching, write plan.json."""
-    if not FAVS_JSON.exists():
-        print("==> 请先运行 collect（和可选的 enrich_meta）")
-        return
+def autoclassify(
+    favs_data: dict,
+    seed_map: dict[str, list[str]],
+) -> ClassifyResult:
+    """Classify all videos using 4-layer matching.
 
-    favs = json.loads(FAVS_JSON.read_text(encoding="utf-8"))
-    seed_map = load_seed_mappings()
+    Args:
+        favs_data: Parsed favs.json content (must have "videos" key).
+        seed_map: UP主 → folder mapping from seed_mappings.json.
 
+    Returns:
+        ClassifyResult with groups, layer_counts, unmatched_ups, total.
+    """
     up_to_folder: dict[str, str] = {}
     for folder, ups in seed_map.items():
         for up in ups:
@@ -71,7 +76,7 @@ def autoclassify():
     unmatched_ups: dict[str, list[str]] = {}
     layer_counts: dict[str, int] = defaultdict(int)
 
-    for v in favs.get("videos", []):
+    for v in favs_data.get("videos", []):
         folder, layer = classify_video(v, up_to_folder)
         groups[folder].append(v)
         layer_counts[layer] += 1
@@ -81,58 +86,35 @@ def autoclassify():
             unmatched_ups.setdefault(upper_key, [])
             unmatched_ups[upper_key].append(v.get("title", ""))
 
-    if unmatched_ups:
-        AUTO_CLASSIFY_JSON.write_text(
-            json.dumps(unmatched_ups, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        print(f"==> 未匹配UP ({len(unmatched_ups)} 个) 已保存到 auto_classified.json")
-
-    plan = {
-        "move": True,
-        "groups": {
-            folder: [{"id": v.get("id"), "bvid": v.get("bvid")} for v in vids]
-            for folder, vids in groups.items()
-        },
-    }
-    PLAN_JSON.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
-
     total = sum(len(v) for v in groups.values())
-    print(f"\n==> 已生成 {PLAN_JSON}: {len(groups)} 个文件夹, 共 {total} 个视频")
-    print(f"\n==> 分类命中统计:")
-    print(f"    标签匹配:    {layer_counts.get('tag', 0)}")
-    print(f"    分区匹配:    {layer_counts.get('partition', 0)}")
-    print(f"    UP主映射:    {layer_counts.get('up', 0)}")
-    print(f"    关键词匹配:  {layer_counts.get('keyword', 0)}")
-    print(f"    归入'其他':  {len(unmatched_ups)} 个UP主")
-    print()
-    for f, vids in sorted(groups.items(), key=lambda x: -len(x[1])):
-        print(f"    - {f}: {len(vids)}")
-    if unmatched_ups:
-        sample = list(unmatched_ups.keys())[:10]
-        suffix = "..." if len(unmatched_ups) > 10 else ""
-        print(f"\n==> 归入'其他'的UP主: {sample}{suffix}")
-        print(f"    (在 seed_mappings.json 中添加映射可减少'其他')")
-    print("\n==> 请检查 plan.json, 确认后运行 apply")
+    return ClassifyResult(
+        groups=dict(groups),
+        layer_counts=dict(layer_counts),
+        unmatched_ups=unmatched_ups,
+        total=total,
+    )
 
 
-def genplan():
-    """Simpler plan — manual UP mapping only, no keyword/tag/partition fallback."""
-    if not FAVS_JSON.exists():
-        print("==> 请先运行 collect")
-        return
+def genplan(
+    favs_data: dict,
+    seed_map: dict[str, list[str]],
+) -> dict:
+    """Generate a simple plan using only UP主 mapping.
 
-    favs = json.loads(FAVS_JSON.read_text(encoding="utf-8"))
-    seed_map = load_seed_mappings()
+    Args:
+        favs_data: Parsed favs.json content (must have "videos" key).
+        seed_map: UP主 → folder mapping from seed_mappings.json.
 
+    Returns:
+        Plan dict: {"move": True, "groups": {folder: [{"id": ..., "bvid": ...}]}}
+    """
     up_to_folder: dict[str, str] = {}
     for folder, ups in seed_map.items():
         for up in ups:
             up_to_folder[up] = folder
 
     groups: dict[str, list[dict]] = defaultdict(list)
-    unmatched = set()
-    for v in favs.get("videos", []):
+    for v in favs_data.get("videos", []):
         up = v.get("upper") or "未知UP"
         bvid = v.get("bvid") or ""
         vid = v.get("id") or bvid
@@ -140,18 +122,6 @@ def genplan():
         if folder:
             groups[folder].append({"bvid": bvid, "id": vid})
         else:
-            unmatched.add(up)
             groups.setdefault("其他", []).append({"bvid": bvid, "id": vid})
 
-    plan = {"move": True, "groups": dict(groups)}
-    PLAN_JSON.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    total = sum(len(v) for v in groups.values())
-    print(f"==> 已生成 {PLAN_JSON}: {len(groups)} 个文件夹, 共 {total} 个视频")
-    for f, bvs in groups.items():
-        print(f"    - {f}: {len(bvs)}")
-    if unmatched:
-        sample = sorted(unmatched)[:20]
-        suffix = "..." if len(unmatched) > 20 else ""
-        print(f"==> 未匹配UP主 ({len(unmatched)}): {sample}{suffix}")
-    print("==> 请检查 plan.json, 确认后运行 apply")
+    return {"move": True, "groups": dict(groups)}

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import queue
 import sys
@@ -108,7 +109,7 @@ class PipelineRunner:
     def _collect(self):
         self.log("━" * 50)
         self.log("步骤 1/4: 扫码登录并拉取收藏夹")
-        self.progress(5, "启动浏览器...")
+        self.progress(5, "启动浏览器...", 0)
 
         import bilibili_fav_classifier.collect as collect_mod
 
@@ -134,21 +135,21 @@ class PipelineRunner:
         cfg = load_user_config()
         self.log(f"✓ MID: {cfg.get('USER_MID', '?')}")
         self.log(f"✓ 默认收藏夹 ID: {cfg.get('DEFAULT_FAV_ID', '?')}")
-        self.progress(25, "收藏夹拉取完成")
+        self.progress(25, "收藏夹拉取完成", 0)
 
     def _enrich(self):
         self.log("━" * 50)
         self.log("步骤 2/4: 补充视频标签和分区")
-        self.progress(30, "分析视频元数据...")
+        self.progress(30, "分析视频元数据...", 1)
         session = Session.load()
         enrich_meta(session=session)
-        self.progress(50, "标签补充完成")
+        self.progress(50, "标签补充完成", 1)
         self.log("✓ 标签/分区补充完成")
 
     def _classify(self):
         self.log("━" * 50)
         self.log("步骤 3/4: 智能分类")
-        self.progress(55, "分析分类...")
+        self.progress(55, "分析分类...", 2)
 
         favs = json.loads(FAVS_JSON.read_text(encoding="utf-8"))
         seed_map = load_seed_mappings()
@@ -172,7 +173,7 @@ class PipelineRunner:
                 encoding="utf-8",
             )
 
-        self.progress(75, "分类完成")
+        self.progress(75, "分类完成", 2)
         self.log(f"✓ {result.total} 个视频 -> {len(result.groups)} 个文件夹")
         for folder, vids in sorted(result.groups.items(), key=lambda x: -len(x[1])):
             self.log(f"    {folder}: {len(vids)}")
@@ -185,10 +186,10 @@ class PipelineRunner:
     def _apply(self):
         self.log("━" * 50)
         self.log("步骤 4/4: 应用分类计划")
-        self.progress(80, "执行分类...")
+        self.progress(80, "执行分类...", 3)
         session = Session.load()
         apply(session.http(), session.csrf)
-        self.progress(100, "全部完成!")
+        self.progress(100, "全部完成!", 3)
         self.log("━" * 50)
         self.log("\U0001f389 全部完成!")
 
@@ -215,13 +216,44 @@ ctk.set_default_color_theme("blue")
 
 BG = "#1a1b26"
 CARD_BG = "#24253a"
+CARD_BG_HOVER = "#2a2b42"
 ACCENT = "#7aa2f7"
-ACCENT_HOVER = "#89b4fa"
+ACCENT_SOFT = "#3b4261"
 SUCCESS = "#9ece6a"
 DANGER = "#f7768e"
+WARNING = "#e0af68"
 TEXT = "#c0caf5"
 TEXT_DIM = "#565f89"
-LOG_BG = "#16161e"
+TEXT_MID = "#9aa5ce"
+LOG_BG = "#14141c"
+DIVIDER = "#2a2b42"
+
+FONT_UI = "Microsoft YaHei UI"
+FONT_MONO = "Cascadia Mono"
+
+STEPS = ["拉取", "补充", "分类", "应用"]
+
+
+# ─── Color utilities ──────────────────────────────────────────────
+
+def _hex_to_rgb(h: str) -> tuple[int, int, int]:
+    h = h.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _rgb_to_hex(rgb: tuple[int, int, int]) -> str:
+    return "#{:02x}{:02x}{:02x}".format(*rgb)
+
+
+def _lerp_color(c1: str, c2: str, t: float) -> str:
+    """Interpolate between two hex colors. t in [0, 1]."""
+    r1, g1, b1 = _hex_to_rgb(c1)
+    r2, g2, b2 = _hex_to_rgb(c2)
+    return _rgb_to_hex((
+        int(r1 + (r2 - r1) * t),
+        int(g1 + (g2 - g1) * t),
+        int(b1 + (b2 - b1) * t),
+    ))
 
 
 # ─── GUI ──────────────────────────────────────────────────────────
@@ -232,97 +264,157 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("B站收藏夹智能分类")
-        self.geometry("760x680")
-        self.minsize(680, 600)
+        self.geometry("780x720")
+        self.minsize(700, 640)
         self.configure(fg_color=BG)
 
         self.log_q: queue.Queue = queue.Queue()
         self.runner: PipelineRunner | None = None
         self.running = False
 
+        self._target_progress = 0.0
+        self._current_progress = 0.0
+        self._pulse_phase = 0.0
+        self._current_step = -1
+        self._toast = None
+
         self._build_ui()
         self._init_status()
         self._poll_queue()
+        self._tick_animation()
+        self._fade_in(0.0)
 
     def _build_ui(self):
-        # Header
+        # ── Header ─────────────────────────────────────────────
         header = ctk.CTkFrame(self, fg_color="transparent")
-        header.pack(fill="x", padx=28, pady=(26, 18))
+        header.pack(fill="x", padx=32, pady=(28, 20))
+
+        title_row = ctk.CTkFrame(header, fg_color="transparent")
+        title_row.pack(fill="x")
 
         ctk.CTkLabel(
-            header,
-            text="B站收藏夹智能分类",
-            font=ctk.CTkFont(family="Microsoft YaHei UI", size=24, weight="bold"),
+            title_row,
+            text="favorites",
+            font=ctk.CTkFont(family=FONT_UI, size=22, weight="bold"),
+            text_color=ACCENT,
+        ).pack(side="left")
+        ctk.CTkLabel(
+            title_row,
+            text="  收藏夹智能分类",
+            font=ctk.CTkFont(family=FONT_UI, size=22, weight="bold"),
             text_color=TEXT,
-        ).pack(anchor="w")
+        ).pack(side="left")
 
         ctk.CTkLabel(
             header,
-            text="扫码登录 · 自动拉取 · 智能分类 · 一键整理",
-            font=ctk.CTkFont(family="Microsoft YaHei UI", size=12),
+            text="扫码登录  ·  自动拉取  ·  智能分类  ·  一键整理",
+            font=ctk.CTkFont(family=FONT_UI, size=11),
             text_color=TEXT_DIM,
-        ).pack(anchor="w", pady=(2, 0))
+        ).pack(anchor="w", pady=(4, 0))
 
-        # Status card
-        status_card = ctk.CTkFrame(self, fg_color=CARD_BG, corner_radius=14)
-        status_card.pack(fill="x", padx=28, pady=(0, 14))
+        # ── Step indicator card ────────────────────────────────
+        step_card = ctk.CTkFrame(self, fg_color=CARD_BG, corner_radius=16)
+        step_card.pack(fill="x", padx=32, pady=(0, 12))
+
+        step_row = ctk.CTkFrame(step_card, fg_color="transparent")
+        step_row.pack(fill="x", padx=20, pady=(18, 6))
+
+        self.step_circles = []
+        self.step_labels = []
+        self.step_lines = []
+        for i, name in enumerate(STEPS):
+            circle = ctk.CTkLabel(
+                step_row,
+                text="○",
+                width=34,
+                height=34,
+                corner_radius=17,
+                fg_color=ACCENT_SOFT,
+                text_color=TEXT_DIM,
+                font=ctk.CTkFont(family=FONT_UI, size=16, weight="bold"),
+            )
+            circle.pack(side="left")
+            self.step_circles.append(circle)
+
+            ctk.CTkLabel(
+                step_row,
+                text=name,
+                font=ctk.CTkFont(family=FONT_UI, size=11),
+                text_color=TEXT_DIM,
+            ).pack(side="left", padx=(6, 0))
+            self.step_labels.append(None)
+
+            if i < len(STEPS) - 1:
+                line = ctk.CTkFrame(
+                    step_row, fg_color=ACCENT_SOFT, height=2, width=44,
+                )
+                line.pack(side="left", fill="x", expand=True, padx=10, pady=0)
+                self.step_lines.append(line)
+
+        # ── Status card ────────────────────────────────────────
+        status_card = ctk.CTkFrame(self, fg_color=CARD_BG, corner_radius=16)
+        status_card.pack(fill="x", padx=32, pady=(0, 12))
 
         self.status_label = ctk.CTkLabel(
             status_card,
-            text="● 就绪",
-            font=ctk.CTkFont(family="Microsoft YaHei UI", size=13, weight="bold"),
-            text_color=TEXT_DIM,
+            text="●  就绪",
+            font=ctk.CTkFont(family=FONT_UI, size=13, weight="bold"),
+            text_color=TEXT_MID,
             anchor="w",
         )
-        self.status_label.pack(fill="x", padx=18, pady=(16, 6))
+        self.status_label.pack(fill="x", padx=20, pady=(16, 8))
 
         self.progress_bar = ctk.CTkProgressBar(
             status_card,
             progress_color=ACCENT,
-            fg_color=LOG_BG,
-            height=8,
-            corner_radius=4,
+            fg_color=ACCENT_SOFT,
+            height=6,
+            corner_radius=3,
         )
         self.progress_bar.set(0)
-        self.progress_bar.pack(fill="x", padx=18, pady=(0, 14))
+        self.progress_bar.pack(fill="x", padx=20, pady=(0, 16))
 
-        # Log card
-        log_card = ctk.CTkFrame(self, fg_color=CARD_BG, corner_radius=14)
-        log_card.pack(fill="both", expand=True, padx=28, pady=(0, 14))
+        # ── Log card ───────────────────────────────────────────
+        log_card = ctk.CTkFrame(self, fg_color=CARD_BG, corner_radius=16)
+        log_card.pack(fill="both", expand=True, padx=32, pady=(0, 12))
+
+        log_header = ctk.CTkFrame(log_card, fg_color="transparent")
+        log_header.pack(fill="x", padx=20, pady=(14, 2))
 
         ctk.CTkLabel(
-            log_card,
+            log_header,
             text="运行日志",
-            font=ctk.CTkFont(family="Microsoft YaHei UI", size=12, weight="bold"),
+            font=ctk.CTkFont(family=FONT_UI, size=11, weight="bold"),
             text_color=TEXT_DIM,
             anchor="w",
-        ).pack(fill="x", padx=18, pady=(14, 4))
+        ).pack(side="left")
 
         self.log_box = ctk.CTkTextbox(
             log_card,
-            font=ctk.CTkFont(family="Consolas", size=12),
+            font=ctk.CTkFont(family=FONT_MONO, size=12),
             text_color=TEXT,
             fg_color=LOG_BG,
             border_width=0,
-            corner_radius=8,
+            corner_radius=10,
             wrap="word",
         )
-        self.log_box.pack(fill="both", expand=True, padx=14, pady=(0, 14))
+        self.log_box.pack(fill="both", expand=True, padx=12, pady=(4, 14))
+        self._setup_log_tags()
         self.log_box.configure(state="disabled")
 
-        # Buttons
+        # ── Buttons ────────────────────────────────────────────
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=28, pady=(0, 8))
+        btn_frame.pack(fill="x", padx=32, pady=(0, 6))
 
         self.start_btn = ctk.CTkButton(
             btn_frame,
             text="▶  开始一键分类",
             command=self._on_start,
-            font=ctk.CTkFont(family="Microsoft YaHei UI", size=14, weight="bold"),
+            font=ctk.CTkFont(family=FONT_UI, size=14, weight="bold"),
             fg_color=SUCCESS,
             hover_color="#7dc24f",
-            text_color="#1a1b26",
-            height=46,
+            text_color="#14141c",
+            height=48,
             corner_radius=12,
         )
         self.start_btn.pack(side="left", fill="x", expand=True, padx=(0, 8))
@@ -331,12 +423,12 @@ class App(ctk.CTk):
             btn_frame,
             text="⏹  停止",
             command=self._on_stop,
-            font=ctk.CTkFont(family="Microsoft YaHei UI", size=13),
+            font=ctk.CTkFont(family=FONT_UI, size=13, weight="bold"),
             fg_color=DANGER,
             hover_color="#e5677e",
-            text_color="#1a1b26",
-            height=46,
-            width=110,
+            text_color="#14141c",
+            height=48,
+            width=100,
             corner_radius=12,
             state="disabled",
         )
@@ -344,53 +436,138 @@ class App(ctk.CTk):
 
         self.open_btn = ctk.CTkButton(
             btn_frame,
-            text="📂  数据文件夹",
+            text="📂  文件夹",
             command=self._on_open,
-            font=ctk.CTkFont(family="Microsoft YaHei UI", size=13),
-            fg_color=CARD_BG,
-            hover_color=("#2d2e45", "#2d2e45"),
-            text_color=TEXT,
-            height=46,
-            width=140,
+            font=ctk.CTkFont(family=FONT_UI, size=13),
+            fg_color="transparent",
+            hover_color=CARD_BG_HOVER,
+            text_color=TEXT_MID,
+            height=48,
+            width=110,
             corner_radius=12,
             border_width=1,
-            border_color=TEXT_DIM,
+            border_color=DIVIDER,
         )
         self.open_btn.pack(side="left")
 
-        # Footer
+        # ── Footer ─────────────────────────────────────────────
         ctk.CTkLabel(
             self,
-            text="🔒 数据仅存储在本地，不会上传到任何服务器",
-            font=ctk.CTkFont(family="Microsoft YaHei UI", size=10),
+            text="🔒  数据仅存储在本地  ·  不会上传到任何服务器",
+            font=ctk.CTkFont(family=FONT_UI, size=10),
             text_color=TEXT_DIM,
-        ).pack(pady=(0, 16))
+        ).pack(pady=(0, 18))
+
+    def _setup_log_tags(self):
+        """Configure color tags for different log message types."""
+        self.log_box.tag_config("success", foreground=SUCCESS)
+        self.log_box.tag_config("error", foreground=DANGER)
+        self.log_box.tag_config("warning", foreground=WARNING)
+        self.log_box.tag_config("step", foreground=ACCENT)
+        self.log_box.tag_config("dim", foreground=TEXT_DIM)
+        self.log_box.tag_config("info", foreground=TEXT_MID)
 
     def _init_status(self):
         cfg = load_user_config()
         if cfg.get("USER_MID"):
-            self._append_log(f"已配置用户: MID={cfg['USER_MID']}")
-            self._append_log(f"默认收藏夹 ID: {cfg.get('DEFAULT_FAV_ID', '?')}")
+            self._append_log(f"已配置用户: MID={cfg['USER_MID']}", "info")
+            self._append_log(f"默认收藏夹 ID: {cfg.get('DEFAULT_FAV_ID', '?')}", "info")
         else:
-            self._append_log("首次使用 - 点击「开始」扫码登录并自动配置")
-        self._append_log("数据文件目录: " + str(_base_dir()))
-        self._append_log("准备就绪")
+            self._append_log("首次使用 - 点击「开始」扫码登录并自动配置", "info")
+        self._append_log("数据文件目录: " + str(_base_dir()), "dim")
+        self._append_log("准备就绪", "success")
 
         if not _check_browsers():
-            self._append_log("⚠ Playwright 浏览器未安装，首次使用前请运行:")
-            self._append_log("  playwright install chromium")
+            self._append_log("⚠ Playwright 浏览器未安装，首次使用前请运行:", "warning")
+            self._append_log("  playwright install chromium", "dim")
+
+    # ── Log output ──────────────────────────────────────────
+
+    def _append_log(self, msg: str, tag: str = ""):
+        self.log_box.configure(state="normal")
+        if tag:
+            self.log_box.insert("end", msg + "\n", tag)
+        else:
+            self.log_box.insert("end", msg + "\n")
+        self.log_box.see("end")
+        self.log_box.configure(state="disabled")
+
+    def _append_log_smart(self, msg: str):
+        """Auto-detect log type from prefix and apply color tag."""
+        tag = ""
+        if msg.startswith("✓"):
+            tag = "success"
+        elif msg.startswith("❌"):
+            tag = "error"
+        elif msg.startswith("⚠"):
+            tag = "warning"
+        elif msg.startswith("━"):
+            tag = "dim"
+        elif msg.startswith("步骤"):
+            tag = "step"
+        elif msg.startswith("    "):
+            tag = "info"
+        self._append_log(msg, tag)
+
+    # ── Animation loop ──────────────────────────────────────
+
+    def _tick_animation(self):
+        """Single animation tick: smooth progress + status pulse."""
+        # Smooth progress interpolation
+        if abs(self._current_progress - self._target_progress) > 0.002:
+            self._current_progress += (
+                self._target_progress - self._current_progress
+            ) * 0.12
+            self.progress_bar.set(self._current_progress)
+        elif self._current_progress != self._target_progress:
+            self._current_progress = self._target_progress
+            self.progress_bar.set(self._current_progress)
+
+        # Pulse status dot while running
+        if self.running:
+            self._pulse_phase += 0.06
+            t = 0.5 + 0.5 * math.sin(self._pulse_phase)
+            color = _lerp_color(ACCENT, SUCCESS, t * 0.4)
+            text = self.status_label.cget("text")
+            if text.startswith("●"):
+                self.status_label.configure(text_color=color)
+
+        self.after(16, self._tick_animation)
+
+    def _fade_in(self, alpha: float):
+        if alpha < 1.0:
+            self.attributes("-alpha", alpha)
+            self.after(12, lambda: self._fade_in(min(alpha + 0.06, 1.0)))
+        else:
+            self.attributes("-alpha", 1.0)
+
+    # ── Step indicator ──────────────────────────────────────
+
+    def _set_step(self, step_idx: int):
+        """Update the 4-step indicator. step_idx: 0-3 active, -1 none."""
+        self._current_step = step_idx
+        for i, circle in enumerate(self.step_circles):
+            if i < step_idx:
+                circle.configure(text="✓", fg_color=SUCCESS, text_color="#14141c")
+            elif i == step_idx:
+                circle.configure(text="●", fg_color=ACCENT, text_color="#14141c")
+            else:
+                circle.configure(text="○", fg_color=ACCENT_SOFT, text_color=TEXT_DIM)
+        for i, line in enumerate(self.step_lines):
+            if i < step_idx:
+                line.configure(fg_color=SUCCESS)
+            else:
+                line.configure(fg_color=ACCENT_SOFT)
+
+    # ── Status & progress ───────────────────────────────────
 
     def _set_status(self, text: str, color: str = TEXT):
         self.status_label.configure(text=text, text_color=color)
 
     def _set_progress(self, pct: int):
-        self.progress_bar.set(pct / 100)
+        self._target_progress = pct / 100
 
-    def _append_log(self, msg: str):
-        self.log_box.configure(state="normal")
-        self.log_box.insert("end", msg + "\n")
-        self.log_box.see("end")
-        self.log_box.configure(state="disabled")
+    # ── Queue polling ───────────────────────────────────────
 
     def _poll_queue(self):
         while True:
@@ -399,48 +576,76 @@ class App(ctk.CTk):
             except queue.Empty:
                 break
             if mtype == "log":
-                self._append_log(mval)
+                self._append_log_smart(mval)
             elif mtype == "progress":
-                pct, msg = mval
+                pct, msg, step = mval
                 self._set_progress(pct)
-                self._set_status(f"● {msg}", ACCENT)
+                self._set_status(f"●  {msg}", ACCENT)
+                self._set_step(step)
             elif mtype == "done":
                 self._finish(success=True)
             elif mtype == "error":
-                self._set_status(f"● 错误: {str(mval)[:50]}", DANGER)
+                self._set_status(f"●  错误: {str(mval)[:50]}", DANGER)
                 self._finish(success=False)
-        self.after(200, self._poll_queue)
+        self.after(120, self._poll_queue)
 
     def _finish(self, success: bool):
         self.running = False
         self.start_btn.configure(state="normal")
         self.stop_btn.configure(state="disabled")
         if success:
-            self._set_status("● 全部完成", SUCCESS)
-            self._show_toast("分类完成！请查看运行日志和 plan.json")
+            self._set_status("●  全部完成", SUCCESS)
+            self._set_step(4)
+            for i, circle in enumerate(self.step_circles):
+                circle.configure(text="✓", fg_color=SUCCESS, text_color="#14141c")
+            self._show_toast("🎉  分类完成！")
         else:
-            self._set_status("● 运行出错", DANGER)
+            self._set_status("●  运行出错", DANGER)
+
+    # ── Toast ───────────────────────────────────────────────
 
     def _show_toast(self, msg: str):
+        if self._toast is not None:
+            self._toast.destroy()
         toast = ctk.CTkToplevel(self)
         toast.overrideredirect(True)
         toast.attributes("-topmost", True)
-        toast.configure(fg_color=CARD_BG)
+        toast.configure(fg_color=SUCCESS)
+        toast.attributes("-alpha", 0.0)
+        self._toast = toast
 
         ctk.CTkLabel(
             toast,
             text=msg,
-            font=ctk.CTkFont(family="Microsoft YaHei UI", size=13),
-            text_color=TEXT,
-            padx=24,
-            pady=14,
+            font=ctk.CTkFont(family=FONT_UI, size=14, weight="bold"),
+            text_color="#14141c",
+            padx=32,
+            pady=16,
         ).pack()
 
         self.update_idletasks()
         x = self.winfo_x() + (self.winfo_width() - toast.winfo_width()) // 2
-        y = self.winfo_y() + 80
+        y = self.winfo_y() + 90
         toast.geometry(f"+{x}+{y}")
-        toast.after(2500, toast.destroy)
+        self._fade_toast(toast, 0.0, fade_in=True)
+
+    def _fade_toast(self, toast, alpha, fade_in):
+        if fade_in:
+            if alpha < 1.0:
+                toast.attributes("-alpha", min(alpha + 0.1, 1.0))
+                self.after(16, lambda: self._fade_toast(toast, alpha + 0.1, True))
+            else:
+                self.after(1800, lambda: self._fade_toast(toast, 1.0, False))
+        else:
+            if alpha > 0:
+                toast.attributes("-alpha", max(alpha - 0.08, 0.0))
+                self.after(16, lambda: self._fade_toast(toast, alpha - 0.08, False))
+            else:
+                toast.destroy()
+                if self._toast is toast:
+                    self._toast = None
+
+    # ── Button handlers ─────────────────────────────────────
 
     def _on_start(self):
         if self.running:
@@ -450,16 +655,16 @@ class App(ctk.CTk):
         self.running = True
         self.start_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
-        self._append_log("━" * 50)
-        self._append_log("\U0001f680 启动分类流程...")
+        self._append_log("━" * 50, "dim")
+        self._append_log("🚀 启动分类流程...", "step")
 
-    def _progress_cb(self, pct: int, msg: str):
-        self.log_q.put(("progress", (pct, msg)))
+    def _progress_cb(self, pct: int, msg: str, step: int = -1):
+        self.log_q.put(("progress", (pct, msg, step)))
 
     def _on_stop(self):
         if self.runner and self.running:
             self.runner.stop()
-            self._append_log("⏹ 正在停止...")
+            self._append_log("⏹ 正在停止...", "warning")
 
     def _on_open(self):
         os.startfile(str(_base_dir()))

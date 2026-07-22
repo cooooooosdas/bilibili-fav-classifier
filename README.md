@@ -274,4 +274,4 @@ python build.py
 
 ## License
 
-MIT — 随便用，随便改。
+MIT — 随便用，随便改喵。

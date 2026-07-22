@@ -267,6 +267,7 @@ class App(ctk.CTk):
         self.geometry("780x720")
         self.minsize(700, 640)
         self.configure(fg_color=BG)
+        self._set_icon()
 
         self.log_q: queue.Queue = queue.Queue()
         self.runner: PipelineRunner | None = None
@@ -283,6 +284,14 @@ class App(ctk.CTk):
         self._poll_queue()
         self._tick_animation()
         self._fade_in(0.0)
+
+    def _set_icon(self):
+        try:
+            icon_path = Path(__file__).parent / "assets" / "app_icon.ico"
+            if icon_path.exists():
+                self.iconbitmap(str(icon_path))
+        except Exception:
+            pass
 
     def _build_ui(self):
         # ── Header ─────────────────────────────────────────────

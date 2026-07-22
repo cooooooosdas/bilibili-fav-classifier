@@ -173,12 +173,3 @@ def keyword_classify(title: str) -> str | None:
             if kw.lower() in t:
                 return folder
     return None
-
-
-from bilibili_fav_classifier.mappings import load_seed_mappings
-
-
-def save_seed_mappings(mappings: dict[str, list[str]]):
-    """Save seed mappings via the mappings module."""
-    from bilibili_fav_classifier.mappings import save_seed_mappings as _save
-    _save(mappings)

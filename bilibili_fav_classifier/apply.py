@@ -1,0 +1,185 @@
+"""Apply classification plan: create folders and move videos.
+
+Uses injectable HTTP client (from session module) for testability.
+"""
+from __future__ import annotations
+
+import json
+import sys
+import time
+
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+from bilibili_fav_classifier.config import (
+    API_BASE,
+    APPLY_LOG_JSON,
+    BATCH_SIZE,
+    DEFAULT_FAV_ID,
+    USER_MID,
+)
+from bilibili_fav_classifier.session import HttpClient
+
+
+def _load_folders(http: HttpClient) -> tuple[dict[str, int], int]:
+    """Return (name_to_id, default_id) from Bilibili API."""
+    data = http.get(
+        f"{API_BASE}/x/v3/fav/folder/created/list-all"
+        f"?up_mid={USER_MID}&platform=web"
+    )
+    folders = data.get("data", {}).get("list", [])
+    name_to_id = {f.get("title"): f.get("id") for f in folders if f.get("id")}
+    default = next(
+        (f for f in folders if "默认" in (f.get("title") or "")), None
+    )
+    default_id = default.get("id") if default else DEFAULT_FAV_ID
+    return name_to_id, default_id
+
+
+def _batch_move(
+    http: HttpClient, csrf: str,
+    src_media_id: int | str, tar_media_id: int | str,
+    resources: list[str],
+) -> dict:
+    """Batch move videos via /x/v3/fav/resource/move API."""
+    data = {
+        "resources": ",".join(f"{r}:2" for r in resources),
+        "src_media_id": str(src_media_id),
+        "tar_media_id": str(tar_media_id),
+        "mid": USER_MID,
+        "platform": "web",
+        "csrf": csrf,
+    }
+    return http.post(f"{API_BASE}/x/v3/fav/resource/move", data)
+
+
+def apply(
+    http: HttpClient, csrf: str,
+    only_folder: str | None = None,
+    plan_path=None,
+) -> None:
+    """Execute the classification plan: create folders and move videos.
+
+    Args:
+        http: Injected HTTP client (swap for tests).
+        csrf: CSRF token from cookies.
+        only_folder: If set, only process this folder.
+        plan_path: Override plan.json path (for testing).
+    """
+    from bilibili_fav_classifier.config import PLAN_JSON, APPLY_LOG_JSON
+
+    plan_file = plan_path or PLAN_JSON
+    if not plan_file.exists():
+        print(f"未找到 {plan_file}, 请先 collect 并生成 plan.json")
+        return
+
+    plan = json.loads(plan_file.read_text(encoding="utf-8"))
+    do_move = plan.get("move", True)
+    groups = plan.get("groups", {})
+    total = sum(len(v) for v in groups.values())
+    print(f"==> 计划: {len(groups)} 个文件夹, 共 {total} 个视频, move={do_move}")
+
+    name_to_id, default_id = _load_folders(http)
+    log: list[dict] = []
+    CREATE_URL = f"{API_BASE}/x/v3/fav/folder/add"
+
+    for folder_name, bvids in groups.items():
+        if only_folder and folder_name != only_folder:
+            continue
+        if folder_name == "其他":
+            print(f"\n==> 跳过 '其他' (共 {len(bvids)} 个)")
+            log.append({"folder": folder_name, "skipped": True, "count": len(bvids)})
+            continue
+
+        if folder_name in name_to_id:
+            fid = name_to_id[folder_name]
+            print(f"\n==> 收藏夹已存在: {folder_name} (id={fid})")
+        else:
+            print(f"\n==> 创建收藏夹: {folder_name}")
+            r = http.post(CREATE_URL, {
+                "title": folder_name, "intro": "", "privacy": 0, "cover": "", "csrf": csrf,
+            })
+            if r.get("code") != 0:
+                print(f"    创建失败: {r}")
+                log.append({"folder": folder_name, "error": "create failed", "resp": r})
+                continue
+            fid = r.get("data", {}).get("id")
+            name_to_id[folder_name] = fid
+            print(f"    创建成功 id={fid}")
+            time.sleep(2)
+
+        ok = fail = 0
+        total_vids = len(bvids)
+
+        if do_move:
+            for batch_start in range(0, total_vids, BATCH_SIZE):
+                batch = bvids[batch_start:batch_start + BATCH_SIZE]
+                rids = [str(v.get("id") or v.get("bvid", "")) for v in batch]
+                result = _batch_move(http, csrf, default_id, fid, rids)
+
+                if result.get("_waf_html"):
+                    print(
+                        f"    [{folder_name}] 批次 {batch_start // BATCH_SIZE + 1}"
+                        f" WAF限流, 冷却60秒...",
+                        flush=True,
+                    )
+                    time.sleep(60)
+                    result = _batch_move(http, csrf, default_id, fid, rids)
+                    if result.get("_waf_html"):
+                        print(
+                            f"    [{folder_name}] 批次 {batch_start // BATCH_SIZE + 1}"
+                            f" 冷却后仍限流, 跳过",
+                            flush=True,
+                        )
+                        fail += len(batch)
+                        continue
+
+                code = result.get("code", -1)
+                if code == 0:
+                    ok += len(batch)
+                    print(
+                        f"    [{folder_name}] 批次 {batch_start // BATCH_SIZE + 1}"
+                        f": {len(batch)}/{len(batch)} (累计 {ok}/{total_vids})",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"    [{folder_name}] 批次 {batch_start // BATCH_SIZE + 1}"
+                        f": 失败 code={code} {str(result.get('message', ''))[:60]}",
+                        flush=True,
+                    )
+                    fail += len(batch)
+                    log.append({"folder": folder_name, "batch": batch_start, "error": result})
+
+                time.sleep(1.5)
+        else:
+            for batch_start in range(0, total_vids, BATCH_SIZE):
+                batch = bvids[batch_start:batch_start + BATCH_SIZE]
+                rids = [str(v.get("id") or v.get("bvid", "")) for v in batch]
+                result = _batch_move(http, csrf, 0, fid, rids)
+                code = result.get("code", -1)
+                if code == 0:
+                    ok += len(batch)
+                else:
+                    fail += len(batch)
+                print(
+                    f"    [{folder_name}] 批次 {batch_start // BATCH_SIZE + 1}"
+                    f": {'OK' if code == 0 else 'FAIL'} ({ok}/{total_vids})",
+                    flush=True,
+                )
+                time.sleep(1.5)
+
+        print(f"==> {folder_name}: 移动 {ok}/{total_vids} 成功 (失败{fail})")
+        log.append({
+            "folder": folder_name, "id": fid,
+            "moved": ok, "total": total_vids, "failed": fail,
+        })
+        time.sleep(2)
+
+    from bilibili_fav_classifier.config import APPLY_LOG_JSON
+    APPLY_LOG_JSON.write_text(
+        json.dumps(log, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    total_ok = sum(e.get("moved", 0) for e in log if isinstance(e, dict) and "moved" in e)
+    total_fail = sum(e.get("failed", 0) for e in log if isinstance(e, dict) and "failed" in e)
+    print(f"\n==> 完成! 日志: {APPLY_LOG_JSON}")
+    print(f"==> 总计移动: {total_ok}/{total} 个视频 (失败 {total_fail})")

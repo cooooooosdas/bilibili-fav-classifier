@@ -32,6 +32,7 @@ from bilibili_fav_classifier.config import (
     BATCH_SIZE,
     COOKIES_PATH,
     DEFAULT_FAV_ID,
+    DEFAULT_HEADERS,
     FAVS_JSON,
     PLAN_JSON,
     USER_MID,
@@ -180,7 +181,6 @@ async def collect():
                 ),
                 "upper": upper.get("name", ""),
                 "upper_mid": upper.get("mid"),
-                # These will be populated by enrich_meta later
                 "tname": it.get("tname", ""),
                 "tags": it.get("tag", []),
             })
@@ -236,18 +236,10 @@ def _get_session() -> tuple[dict, str]:
 
 def _fetch_video_meta(bvid: str, cookies: dict) -> dict:
     """Fetch video detail to get tname (partition) and tags."""
-    headers = {
-        "Referer": "https://www.bilibili.com/",
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-            " AppleWebKit/537.36 (KHTML, like Gecko)"
-            " Chrome/120.0.0.0 Safari/537.36"
-        ),
-    }
     try:
         r = requests.get(
             f"{API_BASE}/x/web-interface/view?bvid={bvid}",
-            cookies=cookies, headers=headers, timeout=15,
+            cookies=cookies, headers=DEFAULT_HEADERS, timeout=15,
         )
         j = r.json()
         if j.get("code") != 0:
@@ -310,7 +302,11 @@ def enrich_meta():
             print(f"    进度: {i + 1}/{len(need_fetch)} (命中 {ok})")
         time.sleep(0.5)
 
-    # Save cache
+    if ok == 0:
+        print("==> 没有新数据需要保存")
+        return
+
+    # Save cache and updated favs
     cache_path.write_text(
         json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8"
     )
@@ -334,36 +330,32 @@ def enrich_meta():
 # ──────────────────────── Classification ────────────────────────
 
 
-def classify_video(video: dict, up_to_folder: dict[str, str]) -> str:
+def classify_video(video: dict, up_to_folder: dict[str, str]) -> tuple[str, str]:
     """Classify a single video using four layers.
 
-    Priority: tag > partition > UP mapping > title keyword > "其他"
+    Returns (folder, layer_name) where layer_name is one of:
+    "tag", "partition", "up", "keyword", "fallback".
     """
-    title = video.get("title", "")
     tags = video.get("tags") or []
     tname = video.get("tname", "")
     upper = video.get("upper") or ""
 
-    # Layer 1: Tag matching (most precise)
     result = tag_match(tags)
     if result:
-        return result
+        return result, "tag"
 
-    # Layer 2: Partition matching (official Bilibili category)
     result = partition_match(tname)
     if result:
-        return result
+        return result, "partition"
 
-    # Layer 3: UP mapping (personal, most accurate for known creators)
     if upper in up_to_folder:
-        return up_to_folder[upper]
+        return up_to_folder[upper], "up"
 
-    # Layer 4: Title keyword matching
-    result = keyword_classify(title)
+    result = keyword_classify(video.get("title", ""))
     if result:
-        return result
+        return result, "keyword"
 
-    return "其他"
+    return "其他", "fallback"
 
 
 def autoclassify():
@@ -382,29 +374,15 @@ def autoclassify():
 
     groups: dict[str, list[dict]] = defaultdict(list)
     unmatched_ups: dict[str, list[str]] = {}
-    tag_hits = 0
-    partition_hits = 0
-    up_hits = 0
-    keyword_hits = 0
+    layer_counts: dict[str, int] = defaultdict(int)
 
     for v in favs.get("videos", []):
-        folder = classify_video(v, up_to_folder)
+        folder, layer = classify_video(v, up_to_folder)
         groups[folder].append(v)
+        layer_counts[layer] += 1
 
-        # Track which layer matched for diagnostics
-        tags = v.get("tags") or []
-        tname = v.get("tname", "")
-        upper = v.get("upper") or ""
-        if tag_match(tags):
-            tag_hits += 1
-        elif partition_match(tname):
-            partition_hits += 1
-        elif upper in up_to_folder:
-            up_hits += 1
-        elif keyword_classify(v.get("title", "")):
-            keyword_hits += 1
-        else:
-            upper_key = upper or "未知UP"
+        if layer == "fallback":
+            upper_key = v.get("upper") or "未知UP"
             unmatched_ups.setdefault(upper_key, [])
             unmatched_ups[upper_key].append(v.get("title", ""))
 
@@ -430,10 +408,10 @@ def autoclassify():
     total = sum(len(v) for v in groups.values())
     print(f"\n==> 已生成 {PLAN_JSON}: {len(groups)} 个文件夹, 共 {total} 个视频")
     print(f"\n==> 分类命中统计:")
-    print(f"    标签匹配:    {tag_hits}")
-    print(f"    分区匹配:    {partition_hits}")
-    print(f"    UP主映射:    {up_hits}")
-    print(f"    关键词匹配:  {keyword_hits}")
+    print(f"    标签匹配:    {layer_counts.get('tag', 0)}")
+    print(f"    分区匹配:    {layer_counts.get('partition', 0)}")
+    print(f"    UP主映射:    {layer_counts.get('up', 0)}")
+    print(f"    关键词匹配:  {layer_counts.get('keyword', 0)}")
     print(f"    归入'其他':  {len(unmatched_ups)} 个UP主")
     print()
     for f, vids in sorted(groups.items(), key=lambda x: -len(x[1])):
@@ -442,7 +420,7 @@ def autoclassify():
         sample = list(unmatched_ups.keys())[:10]
         suffix = "..." if len(unmatched_ups) > 10 else ""
         print(f"\n==> 归入'其他'的UP主: {sample}{suffix}")
-        print(f"    (在 up_mappings.json 中添加映射可减少'其他')")
+        print(f"    (在 seed_mappings.json 中添加映射可减少'其他')")
     print("\n==> 请检查 plan.json, 确认后运行 apply")
 
 
@@ -490,14 +468,14 @@ def genplan():
 # ──────────────────────── Apply ────────────────────────
 
 
-def _api_get(url: str, cookies: dict, headers: dict):
-    r = requests.get(url, cookies=cookies, headers=headers, timeout=15)
+def _api_get(url: str, cookies: dict):
+    r = requests.get(url, cookies=cookies, headers=DEFAULT_HEADERS, timeout=15)
     return r.json()
 
 
-def _api_post(url: str, data: dict, cookies: dict, headers: dict):
+def _api_post(url: str, data: dict, cookies: dict):
     try:
-        r = requests.post(url, data=data, cookies=cookies, headers=headers, timeout=15)
+        r = requests.post(url, data=data, cookies=cookies, headers=DEFAULT_HEADERS, timeout=15)
         ct = r.headers.get("content-type", "")
         if "json" not in ct.lower():
             return {"_waf_html": True, "_status": r.status_code, "_ctype": ct}
@@ -513,14 +491,6 @@ def _batch_move(
     tar_media_id: int | str, resources: list[str],
 ) -> dict:
     """Batch move videos via /x/v3/fav/resource/move API."""
-    headers = {
-        "Referer": "https://www.bilibili.com/",
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-            " AppleWebKit/537.36 (KHTML, like Gecko)"
-            " Chrome/120.0.0.0 Safari/537.36"
-        ),
-    }
     resources_str = ",".join(f"{r}:2" for r in resources)
     data = {
         "resources": resources_str,
@@ -532,7 +502,7 @@ def _batch_move(
     }
     r = requests.post(
         f"{API_BASE}/x/v3/fav/resource/move",
-        data=data, cookies=cookies, headers=headers, timeout=30,
+        data=data, cookies=cookies, headers=DEFAULT_HEADERS, timeout=30,
     )
     ct = r.headers.get("content-type", "")
     if "json" not in ct.lower():
@@ -558,18 +528,10 @@ def apply(only_folder: str | None = None):
         print("==> cookies 中无 bili_jct, 请重新运行 collect")
         return
 
-    headers = {
-        "Referer": "https://www.bilibili.com/",
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-            " AppleWebKit/537.36 (KHTML, like Gecko)"
-            " Chrome/120.0.0.0 Safari/537.36"
-        ),
-    }
     folders_data = _api_get(
         f"{API_BASE}/x/v3/fav/folder/created/list-all"
         f"?up_mid={USER_MID}&platform=web",
-        cookies, headers,
+        cookies,
     )
     folders = folders_data.get("data", {}).get("list", [])
     name_to_id = {f.get("title"): f.get("id") for f in folders if f.get("id")}
@@ -598,7 +560,7 @@ def apply(only_folder: str | None = None):
             r = _api_post(
                 CREATE_URL,
                 {"title": folder_name, "intro": "", "privacy": 0, "cover": "", "csrf": csrf},
-                cookies, headers,
+                cookies,
             )
             if r.get("code") != 0:
                 print(f"    创建失败: {r}")

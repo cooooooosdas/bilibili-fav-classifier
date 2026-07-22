@@ -28,10 +28,7 @@ from bilibili_fav_classifier.rules import (
     partition_match,
     tag_match,
 )
-from bilibili_fav_classifier.mappings import (
-    load_seed_mappings as _load_seed,
-    save_seed_mappings,
-)
+from bilibili_fav_classifier.mappings import save_seed_mappings
 from bilibili_fav_classifier.classify import classify_video
 
 __all__ = [

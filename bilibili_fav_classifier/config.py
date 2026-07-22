@@ -17,6 +17,16 @@ AUTO_CLASSIFY_JSON = ROOT / "auto_classified.json"
 BATCH_SIZE = 50
 API_BASE = "https://api.bilibili.com"
 
+# Shared HTTP headers for all Bilibili API calls
+DEFAULT_HEADERS = {
+    "Referer": "https://www.bilibili.com/",
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        " AppleWebKit/537.36 (KHTML, like Gecko)"
+        " Chrome/120.0.0.0 Safari/537.36"
+    ),
+}
+
 
 def get_cookies() -> dict:
     if not COOKIES_PATH.exists():

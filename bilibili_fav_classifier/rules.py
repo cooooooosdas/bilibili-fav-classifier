@@ -3,11 +3,6 @@
 Bilibili assigns each video an official partition (tname) and user-added tags.
 These are more reliable signals than title keywords alone.
 """
-import json
-from pathlib import Path
-
-ROOT = Path(__file__).parent
-SEED_MAPPINGS = ROOT / "seed_mappings.json"
 
 # Bilibili official partition (tname) → folder mapping
 # Source: https://www.bilibili.com/blackboard/blackroom.html
@@ -180,15 +175,10 @@ def keyword_classify(title: str) -> str | None:
     return None
 
 
-def load_seed_mappings() -> dict[str, list[str]]:
-    """Load seed (manual) UP→folder mappings from JSON file."""
-    if SEED_MAPPINGS.exists():
-        return json.loads(SEED_MAPPINGS.read_text(encoding="utf-8"))
-    return {}
+from bilibili_fav_classifier.mappings import load_seed_mappings
 
 
 def save_seed_mappings(mappings: dict[str, list[str]]):
-    SEED_MAPPINGS.write_text(
-        json.dumps(mappings, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    print(f"==> 种子映射已保存到 {SEED_MAPPINGS}")
+    """Save seed mappings via the mappings module."""
+    from bilibili_fav_classifier.mappings import save_seed_mappings as _save
+    _save(mappings)

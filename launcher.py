@@ -111,17 +111,13 @@ class PipelineRunner:
         self.log("步骤 1/4: 扫码登录并拉取收藏夹")
         self.progress(5, "启动浏览器...", 0)
 
-        import bilibili_fav_classifier.collect as collect_mod
-
-        original_path = collect_mod.CHROME_PATH
         bundled = _find_bundled_browser()
-        if bundled:
-            collect_mod.CHROME_PATH = bundled
 
         try:
-            asyncio.run(collect())
-        finally:
-            collect_mod.CHROME_PATH = original_path
+            asyncio.run(collect(bundled))
+        except Exception as exc:
+            self.log(f"❌ 拉取失败: {exc}")
+            return
 
         if self._stop.is_set():
             return

@@ -52,15 +52,16 @@ async def wait_for_login(page, timeout: int = 180):
     return None
 
 
-async def collect():
+async def collect(chrome_path: str | None = None):
     """Launch browser, log in, scrape all videos from default favorite folder.
 
     User MID and default fav ID are auto-detected from the API on first run
     and persisted to config.json for subsequent runs.
     """
+    browser_path = chrome_path or CHROME_PATH
     async with async_playwright() as p:
         browser = await p.chromium.launch(
-            headless=False, executable_path=CHROME_PATH, args=BROWSER_ARGS,
+            headless=False, executable_path=browser_path, args=BROWSER_ARGS,
         )
         context = await browser.new_context()
         page = await context.new_page()

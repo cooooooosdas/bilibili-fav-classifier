@@ -285,14 +285,6 @@ class App(ctk.CTk):
         self._tick_animation()
         self._fade_in(0.0)
 
-    def _set_icon(self):
-        try:
-            icon_path = Path(__file__).parent / "assets" / "app_icon.ico"
-            if icon_path.exists():
-                self.iconbitmap(str(icon_path))
-        except Exception:
-            pass
-
     def _build_ui(self):
         # ── Header ─────────────────────────────────────────────
         header = ctk.CTkFrame(self, fg_color="transparent")

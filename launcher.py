@@ -267,8 +267,6 @@ class App(ctk.CTk):
         self.geometry("780x720")
         self.minsize(700, 640)
         self.configure(fg_color=BG)
-        self._set_icon()
-
         self.log_q: queue.Queue = queue.Queue()
         self.runner: PipelineRunner | None = None
         self.running = False

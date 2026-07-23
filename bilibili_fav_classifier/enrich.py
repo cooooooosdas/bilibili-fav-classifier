@@ -40,6 +40,7 @@ def enrich_meta(
     session=None,
     favs_path=None,
     cache_path=None,
+    progress_cb=None,
 ) -> None:
     """Supplement tname and tags for each video by calling the video detail API.
 
@@ -47,6 +48,7 @@ def enrich_meta(
         session: Authenticated Session. If None, loads from disk.
         favs_path: Path to favs.json. Defaults to config.FAVS_JSON.
         cache_path: Path to enrich_cache.json. Defaults to config.ENRICH_CACHE_JSON.
+        progress_cb: Optional callback(pct, msg, detail) for progress updates.
     """
     if session is None:
         session = Session.load()
@@ -92,6 +94,7 @@ def enrich_meta(
     print(f"==> 需要补充 {len(need_fetch)} 个视频的标签/分区...")
 
     ok = 0
+    total = len(need_fetch)
     for i, v in enumerate(need_fetch):
         bvid = v.get("bvid", "")
         meta = _fetch_video_meta(bvid, http)
@@ -101,7 +104,10 @@ def enrich_meta(
             v["tags"] = meta.get("tags", v.get("tags", []))
             ok += 1
         if (i + 1) % 20 == 0:
-            print(f"    进度: {i + 1}/{len(need_fetch)} (命中 {ok})")
+            print(f"    进度: {i + 1}/{total} (命中 {ok})")
+        if progress_cb:
+            pct = int((i + 1) / total * 100)
+            progress_cb(pct, "补充标签...", f"{i + 1}/{total}  (命中 {ok})")
         time.sleep(0.5)
 
     if ok == 0:

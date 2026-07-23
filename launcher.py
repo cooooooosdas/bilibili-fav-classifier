@@ -113,8 +113,11 @@ class PipelineRunner:
 
         bundled = _find_bundled_browser()
 
+        def _prog(pct, msg, detail=""):
+            self.progress(5 + int(pct * 0.2), msg, 0, detail)
+
         try:
-            asyncio.run(collect(bundled))
+            asyncio.run(collect(bundled, progress_cb=_prog))
         except Exception as exc:
             self.log(f"❌ 拉取失败: {exc}")
             return
@@ -126,29 +129,37 @@ class PipelineRunner:
             return
 
         favs = json.loads(FAVS_JSON.read_text(encoding="utf-8"))
-        self.log(f"✓ 已拉取 {favs.get('count', 0)} 个视频")
+        count = favs.get('count', 0)
+        self.log(f"✓ 已拉取 {count} 个视频")
+        self.progress(25, "收藏夹拉取完成", 0, f"共 {count} 个视频")
 
         cfg = load_user_config()
         self.log(f"✓ MID: {cfg.get('USER_MID', '?')}")
         self.log(f"✓ 默认收藏夹 ID: {cfg.get('DEFAULT_FAV_ID', '?')}")
-        self.progress(25, "收藏夹拉取完成", 0)
 
     def _enrich(self):
         self.log("━" * 50)
         self.log("步骤 2/4: 补充视频标签和分区")
         self.progress(30, "分析视频元数据...", 1)
+
         session = Session.load()
-        enrich_meta(session=session)
+
+        def _prog(pct, msg, detail=""):
+            self.progress(30 + int(pct * 0.2), msg, 1, detail)
+
+        enrich_meta(session=session, progress_cb=_prog)
         self.progress(50, "标签补充完成", 1)
         self.log("✓ 标签/分区补充完成")
 
     def _classify(self):
         self.log("━" * 50)
         self.log("步骤 3/4: 智能分类")
-        self.progress(55, "分析分类...", 2)
+        self.progress(55, "分析分类...", 2, "加载数据中...")
 
         favs = json.loads(FAVS_JSON.read_text(encoding="utf-8"))
         seed_map = load_seed_mappings()
+        total = len(favs.get("videos", []))
+        self.progress(60, "正在分类...", 2, f"共 {total} 个视频，匹配分类规则...")
         result = autoclassify(favs, seed_map)
 
         plan = {
@@ -169,8 +180,9 @@ class PipelineRunner:
                 encoding="utf-8",
             )
 
-        self.progress(75, "分类完成", 2)
-        self.log(f"✓ {result.total} 个视频 -> {len(result.groups)} 个文件夹")
+        folder_count = len(result.groups)
+        self.progress(75, "分类完成", 2, f"{total} 个视频 → {folder_count} 个文件夹")
+        self.log(f"✓ {total} 个视频 -> {folder_count} 个文件夹")
         for folder, vids in sorted(result.groups.items(), key=lambda x: -len(x[1])):
             self.log(f"    {folder}: {len(vids)}")
         if result.unmatched_ups:
@@ -185,9 +197,13 @@ class PipelineRunner:
         self.progress(80, "执行分类...", 3)
         session = Session.load()
         cfg = load_user_config()
+
+        def _prog(pct, msg, detail=""):
+            self.progress(80 + int(pct * 0.2), msg, 3, detail)
         apply(
             session.http(), session.csrf,
             user_mid=session.mid, default_fav_id=cfg.get("DEFAULT_FAV_ID", 0),
+            progress_cb=_prog,
         )
         self.progress(100, "全部完成!", 3)
         self.log("━" * 50)
@@ -372,7 +388,16 @@ class App(ctk.CTk):
             corner_radius=3,
         )
         self.progress_bar.set(0)
-        self.progress_bar.pack(fill="x", padx=20, pady=(0, 16))
+        self.progress_bar.pack(fill="x", padx=20, pady=(0, 4))
+
+        self.progress_detail = ctk.CTkLabel(
+            status_card,
+            text="",
+            font=ctk.CTkFont(family=FONT_UI, size=10),
+            text_color=TEXT_DIM,
+            anchor="w",
+        )
+        self.progress_detail.pack(fill="x", padx=20, pady=(0, 12))
 
         # ── Log card ───────────────────────────────────────────
         log_card = ctk.CTkFrame(self, fg_color=CARD_BG, corner_radius=16)
@@ -578,10 +603,12 @@ class App(ctk.CTk):
             if mtype == "log":
                 self._append_log_smart(mval)
             elif mtype == "progress":
-                pct, msg, step = mval
+                pct, msg, step, detail = mval
                 self._set_progress(pct)
                 self._set_status(f"●  {msg}", ACCENT)
                 self._set_step(step)
+                if detail:
+                    self.progress_detail.configure(text=detail)
             elif mtype == "done":
                 self._finish(success=True)
             elif mtype == "error":
@@ -656,8 +683,8 @@ class App(ctk.CTk):
         self._append_log("━" * 50, "dim")
         self._append_log("🚀 启动分类流程...", "step")
 
-    def _progress_cb(self, pct: int, msg: str, step: int = -1):
-        self.log_q.put(("progress", (pct, msg, step)))
+    def _progress_cb(self, pct: int, msg: str, step: int = -1, detail: str = ""):
+        self.log_q.put(("progress", (pct, msg, step, detail)))
 
     def _on_stop(self):
         if self.runner and self.running:

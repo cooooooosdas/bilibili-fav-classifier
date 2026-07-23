@@ -57,7 +57,8 @@ async def wait_for_login(page, timeout: int = 180):
     return None
 
 
-async def collect(chrome_path: str | None = None, output_dir: Path | None = None):
+async def collect(chrome_path: str | None = None, output_dir: Path | None = None,
+                   progress_cb=None):
     """Launch browser, log in, scrape all videos from default favorite folder.
 
     User MID and default fav ID are auto-detected from the API on first run
@@ -66,6 +67,7 @@ async def collect(chrome_path: str | None = None, output_dir: Path | None = None
     Args:
         chrome_path: Path to Chrome/Chromium executable. Auto-detected if None.
         output_dir: Directory for output files. Defaults to config.ROOT.
+        progress_cb: Optional callback(pct, msg, detail) for progress updates.
     """
     browser_path = chrome_path or _find_chrome()
     out = output_dir or ROOT
@@ -119,6 +121,8 @@ async def collect(chrome_path: str | None = None, output_dir: Path | None = None
             return
 
         print("==> 正在拉取默认收藏夹的全部视频...")
+        if progress_cb:
+            progress_cb(5, "开始拉取视频...", "准备获取收藏夹列表")
 
         all_items = await page.evaluate(f'''async () => {{
             const all = [];
@@ -144,6 +148,8 @@ async def collect(chrome_path: str | None = None, output_dir: Path | None = None
             for e in errors:
                 print(f"    [warn] 第{e.get('page')}页 code={e.get('code')}")
         print(f"==> 共拉取 {len(items)} 条视频")
+        if progress_cb:
+            progress_cb(50, "拉取完成", f"已获取 {len(items)} 条视频")
 
         videos = []
         for it in items:

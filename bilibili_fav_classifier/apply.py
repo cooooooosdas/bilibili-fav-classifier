@@ -55,6 +55,7 @@ def apply(
     only_folder: str | None = None,
     plan_path=None,
     log_path=None,
+    progress_cb=None,
 ) -> None:
     """Execute the classification plan: create folders and move videos.
 
@@ -66,6 +67,7 @@ def apply(
         only_folder: If set, only process this folder.
         plan_path: Override plan.json path (for testing).
         log_path: Override apply_log.json path (for testing).
+        progress_cb: Optional callback(pct, msg, detail) for progress updates.
     """
     plan_file = Path(plan_path) if plan_path is not None else PLAN_JSON
     if not plan_file.exists():
@@ -101,6 +103,8 @@ def apply(
             print(f"\n==> 收藏夹已存在: {folder_name} (id={fid})")
         else:
             print(f"\n==> 创建收藏夹: {folder_name}")
+            if progress_cb:
+                progress_cb(5, "创建收藏夹...", folder_name)
             r = http.post(CREATE_URL, {
                 "title": folder_name, "intro": "", "privacy": 0, "cover": "", "csrf": csrf,
             })
@@ -111,15 +115,22 @@ def apply(
             fid = r.get("data", {}).get("id")
             name_to_id[folder_name] = fid
             print(f"    创建成功 id={fid}")
+            if progress_cb:
+                progress_cb(10, "收藏夹已创建", folder_name)
             time.sleep(2)
 
         ok = fail = 0
         total_vids = len(bvids)
 
         if do_move:
+            if progress_cb:
+                progress_cb(15, "移动视频...", f"{folder_name} ({total_vids} 个)")
             for batch_start in range(0, total_vids, BATCH_SIZE):
                 batch = bvids[batch_start:batch_start + BATCH_SIZE]
                 rids = [str(v.get("id") or v.get("bvid", "")) for v in batch]
+                if progress_cb:
+                    batch_pct = 15 + int(batch_start / total_vids * 70) if total_vids else 15
+                    progress_cb(batch_pct, "移动视频...", f"{folder_name}: {batch_start}/{total_vids}")
                 result = _batch_move(http, csrf, user_mid, default_id, fid, rids)
 
                 if result.get("_waf_html"):
@@ -158,6 +169,8 @@ def apply(
 
                 time.sleep(1.5)
         else:
+            if progress_cb:
+                progress_cb(15, "预览模式...", f"{folder_name} ({total_vids} 个)")
             for batch_start in range(0, total_vids, BATCH_SIZE):
                 batch = bvids[batch_start:batch_start + BATCH_SIZE]
                 rids = [str(v.get("id") or v.get("bvid", "")) for v in batch]
@@ -175,6 +188,8 @@ def apply(
                 time.sleep(1.5)
 
         print(f"==> {folder_name}: 移动 {ok}/{total_vids} 成功 (失败{fail})")
+        if progress_cb:
+            progress_cb(85, "移动视频...", f"{folder_name}: {ok}/{total_vids}")
         log.append({
             "folder": folder_name, "id": fid,
             "moved": ok, "total": total_vids, "failed": fail,

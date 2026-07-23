@@ -277,6 +277,7 @@ class App(ctk.CTk):
         self._init_status()
         self._poll_queue()
         self._tick_animation()
+        self.attributes("-alpha", 0.0)
         self._fade_in(0.0)
 
     def _build_ui(self):
@@ -591,8 +592,6 @@ class App(ctk.CTk):
         if success:
             self._set_status("●  全部完成", SUCCESS)
             self._set_step(4)
-            for i, circle in enumerate(self.step_circles):
-                circle.configure(text="✓", fg_color=SUCCESS, text_color="#14141c")
             self._show_toast("🎉  分类完成！")
         else:
             self._set_status("●  运行出错", DANGER)

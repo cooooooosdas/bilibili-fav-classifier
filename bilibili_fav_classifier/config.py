@@ -20,15 +20,6 @@ AUTO_CLASSIFY_JSON = ROOT / "auto_classified.json"
 BATCH_SIZE = 50
 API_BASE = "https://api.bilibili.com"
 
-DEFAULT_HEADERS = {
-    "Referer": "https://www.bilibili.com/",
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-        " AppleWebKit/537.36 (KHTML, like Gecko)"
-        " Chrome/120.0.0.0 Safari/537.36"
-    ),
-}
-
 
 def load_user_config() -> dict:
     """Load user config from config.json (created on first run)."""

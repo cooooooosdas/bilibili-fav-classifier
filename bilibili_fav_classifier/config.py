@@ -46,3 +46,20 @@ def save_user_config(user_mid: str, default_fav_id: int):
 _user_cfg = load_user_config()
 USER_MID: str = _user_cfg.get("USER_MID", "")
 DEFAULT_FAV_ID: int = _user_cfg.get("DEFAULT_FAV_ID", 0)
+
+SEED_FILE = ROOT / "seed_mappings.json"
+
+
+def load_seed_mappings() -> dict[str, list[str]]:
+    """Load UP主 → folder mapping from seed_mappings.json."""
+    if SEED_FILE.exists():
+        return json.loads(SEED_FILE.read_text(encoding="utf-8"))
+    return {}
+
+
+def save_seed_mappings(mappings: dict[str, list[str]]):
+    """Persist seed mappings to disk."""
+    SEED_FILE.write_text(
+        json.dumps(mappings, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    print(f"==> 种子映射已保存到 {SEED_FILE}")

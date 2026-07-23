@@ -56,6 +56,7 @@ class TestSessionLoad:
     def test_mid_uses_config_json(self, tmp_path, monkeypatch):
         """Session.mid reads USER_MID from config.json via load_user_config."""
         import bilibili_fav_classifier.session as session_mod
+        import bilibili_fav_classifier.config as config_mod
 
         cookie_file = tmp_path / "cookies.json"
         cookie_file.write_text(
@@ -63,8 +64,7 @@ class TestSessionLoad:
             encoding="utf-8",
         )
         monkeypatch.setattr(session_mod, "COOKIES_PATH", cookie_file)
-        # Monkeypatch load_user_config to return our test mid
-        monkeypatch.setattr(session_mod, "load_user_config", lambda: {"USER_MID": "99999999"})
+        monkeypatch.setattr(config_mod, "load_user_config", lambda: {"USER_MID": "99999999"})
 
         session = Session.load()
         assert session.mid == "99999999"

@@ -12,7 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from bilibili_fav_classifier.mappings import load_seed_mappings, save_seed_mappings
+from bilibili_fav_classifier.config import load_seed_mappings, save_seed_mappings
 
 
 class TestLoadSeedMappings:
@@ -22,8 +22,7 @@ class TestLoadSeedMappings:
             json.dumps({"AI与编程技术": ["UP1"], "音乐": ["UP2"]}, ensure_ascii=False),
             encoding="utf-8",
         )
-        # Patch SEED_FILE path via monkeypatch
-        import bilibili_fav_classifier.mappings as mod
+        import bilibili_fav_classifier.config as mod
         original = mod.SEED_FILE
         mod.SEED_FILE = target
         try:
@@ -33,7 +32,7 @@ class TestLoadSeedMappings:
             mod.SEED_FILE = original
 
     def test_missing_file_returns_empty_dict(self, tmp_path):
-        import bilibili_fav_classifier.mappings as mod
+        import bilibili_fav_classifier.config as mod
         original = mod.SEED_FILE
         mod.SEED_FILE = tmp_path / "nonexistent.json"
         try:
@@ -46,7 +45,7 @@ class TestLoadSeedMappings:
         data = {"A": ["u1"], "B": ["u2", "u3"], "C": []}
         target = tmp_path / "seed_mappings.json"
         target.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-        import bilibili_fav_classifier.mappings as mod
+        import bilibili_fav_classifier.config as mod
         original = mod.SEED_FILE
         mod.SEED_FILE = target
         try:
@@ -60,7 +59,7 @@ class TestLoadSeedMappings:
 class TestSaveSeedMappings:
     def test_creates_file(self, tmp_path):
         target = tmp_path / "seed_mappings.json"
-        import bilibili_fav_classifier.mappings as mod
+        import bilibili_fav_classifier.config as mod
         original = mod.SEED_FILE
         mod.SEED_FILE = target
         try:
@@ -72,7 +71,7 @@ class TestSaveSeedMappings:
     def test_writes_valid_json(self, tmp_path):
         target = tmp_path / "seed_mappings.json"
         mappings = {"AI与编程技术": ["UP1", "UP2"], "音乐": ["UP3"]}
-        import bilibili_fav_classifier.mappings as mod
+        import bilibili_fav_classifier.config as mod
         original = mod.SEED_FILE
         mod.SEED_FILE = target
         try:
@@ -85,7 +84,7 @@ class TestSaveSeedMappings:
     def test_overwrites_existing_file(self, tmp_path):
         target = tmp_path / "seed_mappings.json"
         target.write_text(json.dumps({"旧文件夹": ["旧UP"]}, ensure_ascii=False), encoding="utf-8")
-        import bilibili_fav_classifier.mappings as mod
+        import bilibili_fav_classifier.config as mod
         original = mod.SEED_FILE
         mod.SEED_FILE = target
         try:
@@ -103,7 +102,7 @@ class TestSaveSeedMappings:
             "学习与竞赛": ["李永乐老师", "罗翔说刑法"],
             "生活与社会": ["无穷小亮的科普日常"],
         }
-        import bilibili_fav_classifier.mappings as mod
+        import bilibili_fav_classifier.config as mod
         original = mod.SEED_FILE
         mod.SEED_FILE = target
         try:

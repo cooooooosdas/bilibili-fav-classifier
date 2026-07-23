@@ -4,7 +4,6 @@ Pure logic — no CLI, no file I/O. Callers provide data and receive results.
 """
 from __future__ import annotations
 
-import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
 

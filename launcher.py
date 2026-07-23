@@ -23,10 +23,10 @@ from bilibili_fav_classifier.config import (
     AUTO_CLASSIFY_JSON,
     FAVS_JSON,
     PLAN_JSON,
+    load_seed_mappings,
     load_user_config,
 )
 from bilibili_fav_classifier.enrich import enrich_meta
-from bilibili_fav_classifier.mappings import load_seed_mappings
 from bilibili_fav_classifier.session import Session
 
 
@@ -184,7 +184,11 @@ class PipelineRunner:
         self.log("步骤 4/4: 应用分类计划")
         self.progress(80, "执行分类...", 3)
         session = Session.load()
-        apply(session.http(), session.csrf)
+        cfg = load_user_config()
+        apply(
+            session.http(), session.csrf,
+            user_mid=session.mid, default_fav_id=cfg.get("DEFAULT_FAV_ID", 0),
+        )
         self.progress(100, "全部完成!", 3)
         self.log("━" * 50)
         self.log("\U0001f389 全部完成!")

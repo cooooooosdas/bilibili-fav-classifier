@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -15,18 +14,24 @@ from playwright.async_api import async_playwright
 
 from bilibili_fav_classifier.config import (
     API_BASE,
-    COOKIES_PATH,
     FAVS_JSON,
+    ROOT,
     save_user_config,
 )
 from bilibili_fav_classifier.session import save_cookies
 
-_CHROME_CANDIDATES = [
-    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-]
-CHROME_PATH = next((p for p in _CHROME_CANDIDATES if Path(p).exists()), None)
+
+def _find_chrome() -> str | None:
+    for p in [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    ]:
+        if Path(p).exists():
+            return p
+    return None
+
+
 BROWSER_ARGS = [
     "--disable-web-security",
     "--disable-features=IsolateOrigins,site-per-process",
@@ -52,13 +57,18 @@ async def wait_for_login(page, timeout: int = 180):
     return None
 
 
-async def collect(chrome_path: str | None = None):
+async def collect(chrome_path: str | None = None, output_dir: Path | None = None):
     """Launch browser, log in, scrape all videos from default favorite folder.
 
     User MID and default fav ID are auto-detected from the API on first run
     and persisted to config.json for subsequent runs.
+
+    Args:
+        chrome_path: Path to Chrome/Chromium executable. Auto-detected if None.
+        output_dir: Directory for output files. Defaults to config.ROOT.
     """
-    browser_path = chrome_path or CHROME_PATH
+    browser_path = chrome_path or _find_chrome()
+    out = output_dir or ROOT
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=False, executable_path=browser_path, args=BROWSER_ARGS,
@@ -101,7 +111,7 @@ async def collect(chrome_path: str | None = None):
 
         # Persist user config for future runs
         save_user_config(str(mid), default_id)
-        print(f"==> 用户配置已保存到 config.json")
+        print("==> 用户配置已保存到 config.json")
 
         if not default_id:
             print("==> 未找到默认收藏夹, 退出")
@@ -176,7 +186,7 @@ async def collect(chrome_path: str | None = None):
             for up, ts in up_map.items()
         ]
         uppers.sort(key=lambda x: x["count"], reverse=True)
-        summary_path = Path(__file__).parent / "up_summary.json"
+        summary_path = out / "up_summary.json"
         summary_path.write_text(
             json.dumps({"total": len(videos), "uppers": uppers}, ensure_ascii=False, indent=2),
             encoding="utf-8",

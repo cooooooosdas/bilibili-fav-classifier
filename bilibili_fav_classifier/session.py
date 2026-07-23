@@ -9,10 +9,7 @@ from dataclasses import dataclass, field
 
 import requests
 
-from bilibili_fav_classifier.config import (
-    COOKIES_PATH,
-    load_user_config,
-)
+from bilibili_fav_classifier.config import COOKIES_PATH
 
 DEFAULT_HEADERS = {
     "Referer": "https://www.bilibili.com/",
@@ -30,20 +27,19 @@ class Session:
     cookies: dict[str, str]
     csrf: str
     headers: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_HEADERS))
+    mid: str = ""
 
     @classmethod
     def load(cls) -> Session:
-        """Load cookies from disk and extract CSRF token."""
+        """Load cookies from disk and extract CSRF token + mid."""
         raw = json.loads(COOKIES_PATH.read_text(encoding="utf-8"))
         cookies = {c["name"]: c["value"] for c in raw}
         csrf = cookies.get("bili_jct", "")
         if not csrf:
             raise ValueError("No bili_jct in cookies. Re-run collect to login.")
-        return cls(cookies=cookies, csrf=csrf)
-
-    @property
-    def mid(self) -> str:
-        return load_user_config().get("USER_MID", "")
+        from bilibili_fav_classifier.config import load_user_config
+        mid = load_user_config().get("USER_MID", "")
+        return cls(cookies=cookies, csrf=csrf, mid=mid)
 
     def http(self) -> HttpClient:
         """Create an HTTP client bound to this session."""

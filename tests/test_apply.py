@@ -1,9 +1,9 @@
 """Tests for apply.py with injectable HttpClient.
 
 Seams:
-  - apply(http: HttpClient, csrf: str, only_folder: str | None) -> None
-  - _batch_move(http, csrf, src, tar, resources) -> dict
-  - _resolve_default(http) -> (str, int)
+  - apply(http, csrf, user_mid, default_fav_id, only_folder) -> None
+  - _batch_move(http, csrf, user_mid, src, tar, resources) -> dict
+  - _load_folders(http, user_mid, default_fav_id) -> (name_to_id, default_id)
 """
 import json
 import sys
@@ -60,27 +60,27 @@ def _setup_test_env(tmp_path, monkeypatch, plan_groups: dict, cookie_file=None) 
 class TestLoadFolders:
     def test_returns_default_folder(self):
         http = FakeHttp({
-            "https://api.bilibili.com/x/v3/fav/folder/created/list-all?up_mid=&platform=web": {
+            "https://api.bilibili.com/x/v3/fav/folder/created/list-all?up_mid=123&platform=web": {
                 "data": {"list": [
                     {"title": "默认收藏夹", "id": 12345},
                     {"title": "其他", "id": 99999},
                 ]}
             },
         })
-        name_to_id, default_id = _load_folders(http)
+        name_to_id, default_id = _load_folders(http, "123", 0)
         assert "默认收藏夹" in name_to_id
         assert name_to_id["默认收藏夹"] == 12345
         assert default_id == 12345
 
     def test_falls_back_to_config_when_not_found(self):
         http = FakeHttp({
-            "https://api.bilibili.com/x/v3/fav/folder/created/list-all?up_mid=&platform=web": {
+            "https://api.bilibili.com/x/v3/fav/folder/created/list-all?up_mid=123&platform=web": {
                 "data": {"list": []}
             },
         })
-        name_to_id, default_id = _load_folders(http)
+        name_to_id, default_id = _load_folders(http, "123", 99999)
         assert name_to_id == {}
-        assert default_id == 0
+        assert default_id == 99999
 
 
 # ── _batch_move ──────────────────────────────────────────────────
@@ -91,7 +91,7 @@ class TestBatchMove:
         http = FakeHttp({
             "https://api.bilibili.com/x/v3/fav/resource/move": {"code": 0},
         })
-        result = _batch_move(http, "csrf123", 100, 200, ["BV1abc", "BV2def"])
+        result = _batch_move(http, "csrf123", "user_123", 100, 200, ["BV1abc", "BV2def"])
         assert result["code"] == 0
         post_calls = [c for c in http.calls if c["method"] == "post"]
         assert len(post_calls) == 1
@@ -99,7 +99,7 @@ class TestBatchMove:
         assert data["src_media_id"] == "100"
         assert data["tar_media_id"] == "200"
         assert data["csrf"] == "csrf123"
-        assert data["mid"] == ""
+        assert data["mid"] == "user_123"
         assert data["platform"] == "web"
         assert data["resources"] == "BV1abc:2,BV2def:2"
 
@@ -108,7 +108,7 @@ class TestBatchMove:
         http = FakeHttp({
             "https://api.bilibili.com/x/v3/fav/resource/move": {"code": 0},
         })
-        result = _batch_move(http, "csrf", 1, 2, [])
+        result = _batch_move(http, "csrf", "user_1", 1, 2, [])
         assert result["code"] == 0
         data = [c for c in http.calls if c["method"] == "post"][0]["data"]
         assert data["resources"] == ""
@@ -130,7 +130,7 @@ class TestApply:
             "https://api.bilibili.com/x/v3/fav/folder/add": {"code": 0, "data": {"id": 1}},
             "https://api.bilibili.com/x/v3/fav/resource/move": {"code": 0},
         })
-        apply(http, "csrf_test", plan_path=plan_file)
+        apply(http, "csrf_test", user_mid="123", default_fav_id=0, plan_path=plan_file)
         captured = capsys.readouterr().out
         assert "跳过 '其他'" in captured
 
@@ -140,13 +140,13 @@ class TestApply:
             "AI与编程技术": [{"id": 1, "bvid": "BV1"}],
         })
         http = FakeHttp({
-            "https://api.bilibili.com/x/v3/fav/folder/created/list-all?up_mid=&platform=web": {
+            "https://api.bilibili.com/x/v3/fav/folder/created/list-all?up_mid=123&platform=web": {
                 "data": {"list": []}
             },
             "https://api.bilibili.com/x/v3/fav/folder/add": {"code": 0, "data": {"id": 55555}},
             "https://api.bilibili.com/x/v3/fav/resource/move": {"code": 0},
         })
-        apply(http, "csrf_test", plan_path=plan_file)
+        apply(http, "csrf_test", user_mid="123", default_fav_id=0, plan_path=plan_file)
         captured = capsys.readouterr().out
         assert "创建收藏夹: AI与编程技术" in captured
         assert "创建成功 id=55555" in captured
@@ -157,12 +157,12 @@ class TestApply:
             "AI与编程技术": [{"id": 1, "bvid": "BV1"}],
         })
         http = FakeHttp({
-            "https://api.bilibili.com/x/v3/fav/folder/created/list-all?up_mid=&platform=web": {
+            "https://api.bilibili.com/x/v3/fav/folder/created/list-all?up_mid=123&platform=web": {
                 "data": {"list": [{"title": "AI与编程技术", "id": 77777}]}
             },
             "https://api.bilibili.com/x/v3/fav/resource/move": {"code": 0},
         })
-        apply(http, "csrf_test", plan_path=plan_file)
+        apply(http, "csrf_test", user_mid="123", default_fav_id=0, plan_path=plan_file)
         captured = capsys.readouterr().out
         assert "收藏夹已存在" in captured
         post_calls = [c for c in http.calls if c["method"] == "post"]
@@ -175,13 +175,13 @@ class TestApply:
             "游戏与动漫": [{"id": 2, "bvid": "BV2"}],
         })
         http = FakeHttp({
-            "https://api.bilibili.com/x/v3/fav/folder/created/list-all?up_mid=&platform=web": {
+            "https://api.bilibili.com/x/v3/fav/folder/created/list-all?up_mid=123&platform=web": {
                 "data": {"list": []}
             },
             "https://api.bilibili.com/x/v3/fav/folder/add": {"code": 0, "data": {"id": 1}},
             "https://api.bilibili.com/x/v3/fav/resource/move": {"code": 0},
         })
-        apply(http, "csrf_test", only_folder="音乐", plan_path=plan_file)
+        apply(http, "csrf_test", user_mid="123", default_fav_id=0, only_folder="音乐", plan_path=plan_file)
         captured = capsys.readouterr().out
         assert "音乐" in captured
         assert "游戏与动漫" not in captured
@@ -194,13 +194,13 @@ class TestApply:
         log_file = tmp_path / "apply_log.json"
 
         http = FakeHttp({
-            "https://api.bilibili.com/x/v3/fav/folder/created/list-all?up_mid=&platform=web": {
+            "https://api.bilibili.com/x/v3/fav/folder/created/list-all?up_mid=123&platform=web": {
                 "data": {"list": []}
             },
             "https://api.bilibili.com/x/v3/fav/folder/add": {"code": 0, "data": {"id": 111}},
             "https://api.bilibili.com/x/v3/fav/resource/move": {"code": 0},
         })
-        apply(http, "csrf_test", plan_path=plan_file, log_path=log_file)
+        apply(http, "csrf_test", user_mid="123", default_fav_id=0, plan_path=plan_file, log_path=log_file)
 
         log = json.loads(log_file.read_text(encoding="utf-8"))
         assert len(log) == 1

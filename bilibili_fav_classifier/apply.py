@@ -5,7 +5,6 @@ Uses injectable HTTP client (from session module) for testability.
 from __future__ import annotations
 
 import json
-import sys
 import time
 from pathlib import Path
 
@@ -13,16 +12,13 @@ from bilibili_fav_classifier.config import (
     API_BASE,
     APPLY_LOG_JSON,
     BATCH_SIZE,
-    load_user_config,
+    PLAN_JSON,
 )
 from bilibili_fav_classifier.session import HttpClient
 
 
-def _load_folders(http: HttpClient) -> tuple[dict[str, int], int]:
+def _load_folders(http: HttpClient, user_mid: str, default_fav_id: int) -> tuple[dict[str, int], int]:
     """Return (name_to_id, default_id) from Bilibili API."""
-    user_cfg = load_user_config()
-    user_mid = user_cfg.get("USER_MID", "")
-    default_fav_id = user_cfg.get("DEFAULT_FAV_ID", 0)
     data = http.get(
         f"{API_BASE}/x/v3/fav/folder/created/list-all"
         f"?up_mid={user_mid}&platform=web"
@@ -37,17 +33,16 @@ def _load_folders(http: HttpClient) -> tuple[dict[str, int], int]:
 
 
 def _batch_move(
-    http: HttpClient, csrf: str,
+    http: HttpClient, csrf: str, user_mid: str,
     src_media_id: int | str, tar_media_id: int | str,
     resources: list[str],
 ) -> dict:
     """Batch move videos via /x/v3/fav/resource/move API."""
-    user_cfg = load_user_config()
     data = {
         "resources": ",".join(f"{r}:2" for r in resources),
         "src_media_id": str(src_media_id),
         "tar_media_id": str(tar_media_id),
-        "mid": user_cfg.get("USER_MID", ""),
+        "mid": user_mid,
         "platform": "web",
         "csrf": csrf,
     }
@@ -56,6 +51,7 @@ def _batch_move(
 
 def apply(
     http: HttpClient, csrf: str,
+    user_mid: str = "", default_fav_id: int = 0,
     only_folder: str | None = None,
     plan_path=None,
     log_path=None,
@@ -65,6 +61,8 @@ def apply(
     Args:
         http: Injected HTTP client (swap for tests).
         csrf: CSRF token from cookies.
+        user_mid: User's Bilibili MID.
+        default_fav_id: Default favorite folder ID.
         only_folder: If set, only process this folder.
         plan_path: Override plan.json path (for testing).
         log_path: Override apply_log.json path (for testing).
@@ -81,12 +79,12 @@ def apply(
     do_move = plan.get("move", True)
     groups = plan.get("groups", {})
     if not isinstance(groups, dict):
-        print(f"错误: plan.json['groups'] 格式不正确")
+        print("错误: plan.json['groups'] 格式不正确")
         return
     total = sum(len(v) for v in groups.values())
     print(f"==> 计划: {len(groups)} 个文件夹, 共 {total} 个视频, move={do_move}")
 
-    name_to_id, default_id = _load_folders(http)
+    name_to_id, default_id = _load_folders(http, user_mid, default_fav_id)
     log: list[dict] = []
     CREATE_URL = f"{API_BASE}/x/v3/fav/folder/add"
 
@@ -122,7 +120,7 @@ def apply(
             for batch_start in range(0, total_vids, BATCH_SIZE):
                 batch = bvids[batch_start:batch_start + BATCH_SIZE]
                 rids = [str(v.get("id") or v.get("bvid", "")) for v in batch]
-                result = _batch_move(http, csrf, default_id, fid, rids)
+                result = _batch_move(http, csrf, user_mid, default_id, fid, rids)
 
                 if result.get("_waf_html"):
                     print(
@@ -131,7 +129,7 @@ def apply(
                         flush=True,
                     )
                     time.sleep(60)
-                    result = _batch_move(http, csrf, default_id, fid, rids)
+                    result = _batch_move(http, csrf, user_mid, default_id, fid, rids)
                     if result.get("_waf_html"):
                         print(
                             f"    [{folder_name}] 批次 {batch_start // BATCH_SIZE + 1}"
@@ -163,7 +161,7 @@ def apply(
             for batch_start in range(0, total_vids, BATCH_SIZE):
                 batch = bvids[batch_start:batch_start + BATCH_SIZE]
                 rids = [str(v.get("id") or v.get("bvid", "")) for v in batch]
-                result = _batch_move(http, csrf, 0, fid, rids)
+                result = _batch_move(http, csrf, user_mid, 0, fid, rids)
                 code = result.get("code", -1)
                 if code == 0:
                     ok += len(batch)

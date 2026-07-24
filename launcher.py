@@ -87,47 +87,37 @@ class PipelineRunner:
     def stop(self):
         self._stop.set()
 
-    @staticmethod
-    def _pipeline_step(method):
-        @wraps(method)
-        def wrapper(self, *args, **kwargs):
-            if self._stop.is_set():
-                return False
-            try:
-                return method(self, *args, **kwargs)
-            except Exception as exc:
-                self.log(f"\n❌ 错误: {exc}")
-                import traceback
-                self.log(traceback.format_exc())
-                self.q.put(("error", str(exc)))
-                return False
-        return wrapper
+    def _check_stop(self) -> bool:
+        if self._stop.is_set():
+            self.log("⏹ 用户停止操作")
+            return True
+        return False
 
     def run(self):
         try:
-            if not self._collect():
-                return self._done()
-            if self._stop.is_set():
-                return self._done()
-            if not self._enrich():
-                return self._done()
-            if self._stop.is_set():
-                return self._done()
-            if not self._classify():
-                return self._done()
-            if self._stop.is_set():
-                return self._done()
-            if not self._apply():
-                return self._done()
-            self._done()
+            self._collect()
+            if self._check_stop():
+                return self._done("stopped")
+
+            self._enrich()
+            if self._check_stop():
+                return self._done("stopped")
+
+            self._classify()
+            if self._check_stop():
+                return self._done("stopped")
+
+            self._apply()
+            if self._check_stop():
+                return self._done("stopped")
+
+            self._done("success")
         except Exception as exc:
-            self.log(f"\n❌ 错误: {exc}")
+            self.log(f"\n❌ 未预期的错误: {exc}")
             import traceback
             self.log(traceback.format_exc())
-            self.q.put(("error", str(exc)))
-            self._done()
+            self._done("error")
 
-    @_pipeline_step
     def _collect(self):
         self.log("━" * 50)
         self.log("步骤 1/4: 扫码登录并拉取收藏夹")
@@ -142,19 +132,22 @@ class PipelineRunner:
             asyncio.run(collect(bundled, progress_cb=_prog))
         except Exception as exc:
             self.log(f"❌ 拉取失败: {exc}")
-            return False
+            self._done("error")
+            return
 
-        if self._stop.is_set():
-            return False
+        if self._check_stop():
+            return
         if not FAVS_JSON.exists():
             self.log("❌ 收藏夹数据未生成")
-            return False
+            self._done("error")
+            return
 
         try:
             favs = json.loads(FAVS_JSON.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as exc:
             self.log(f"❌ 收藏夹数据文件损坏: {exc}")
-            return False
+            self._done("error")
+            return
         count = favs.get('count', 0)
         self.log(f"✓ 已拉取 {count} 个视频")
         self.progress(25, "收藏夹拉取完成", 0, f"共 {count} 个视频")
@@ -162,25 +155,32 @@ class PipelineRunner:
         cfg = load_user_config()
         self.log(f"✓ MID: {cfg.get('USER_MID', '?')}")
         self.log(f"✓ 默认收藏夹 ID: {cfg.get('DEFAULT_FAV_ID', '?')}")
-        return True
 
-    @_pipeline_step
     def _enrich(self):
         self.log("━" * 50)
         self.log("步骤 2/4: 补充视频标签和分区")
         self.progress(30, "分析视频元数据...", 1)
 
-        session = Session.load()
+        try:
+            session = Session.load()
+        except Exception as exc:
+            self.log(f"❌ 登录会话加载失败: {exc}")
+            self._done("error")
+            return
 
         def _prog(pct, msg, detail=""):
             self.progress(30 + int(pct * 0.2), msg, 1, detail)
 
-        enrich_meta(session=session, progress_cb=_prog)
+        try:
+            enrich_meta(session=session, progress_cb=_prog)
+        except Exception as exc:
+            self.log(f"❌ 标签补充失败: {exc}")
+            self._done("error")
+            return
+
         self.progress(50, "标签补充完成", 1)
         self.log("✓ 标签/分区补充完成")
-        return True
 
-    @_pipeline_step
     def _classify(self):
         self.log("━" * 50)
         self.log("步骤 3/4: 智能分类")
@@ -190,11 +190,18 @@ class PipelineRunner:
             favs = json.loads(FAVS_JSON.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as exc:
             self.log(f"❌ 收藏夹数据文件损坏: {exc}")
-            return False
+            self._done("error")
+            return
         seed_map = load_seed_mappings()
         total = len(favs.get("videos", []))
         self.progress(60, "正在分类...", 2, f"共 {total} 个视频，匹配分类规则...")
-        result = autoclassify(favs, seed_map)
+
+        try:
+            result = autoclassify(favs, seed_map)
+        except Exception as exc:
+            self.log(f"❌ 分类失败: {exc}")
+            self._done("error")
+            return
 
         plan = {
             "move": True,
@@ -224,33 +231,41 @@ class PipelineRunner:
                 f"⚠ '其他'包含 {len(result.unmatched_ups)} 个UP主"
                 " (可编辑 seed_mappings.json 优化)"
             )
-        return True
 
-    @_pipeline_step
     def _apply(self):
         self.log("━" * 50)
         self.log("步骤 4/4: 应用分类计划")
         self.progress(80, "执行分类...", 3)
-        session = Session.load()
+
+        try:
+            session = Session.load()
+        except Exception as exc:
+            self.log(f"❌ 登录会话加载失败: {exc}")
+            self._done("error")
+            return
         cfg = load_user_config()
 
         def _prog(pct, msg, detail=""):
             self.progress(80 + int(pct * 0.2), msg, 3, detail)
-        apply(
-            session.http(), session.csrf,
-            user_mid=session.mid, default_fav_id=cfg.get("DEFAULT_FAV_ID", 0),
-            progress_cb=_prog,
-        )
-        if self._stop.is_set():
-            self.log("⏹ 用户停止操作")
-            return False
+        try:
+            apply(
+                session.http(), session.csrf,
+                user_mid=session.mid, default_fav_id=cfg.get("DEFAULT_FAV_ID", 0),
+                progress_cb=_prog,
+            )
+        except Exception as exc:
+            self.log(f"❌ 执行失败: {exc}")
+            self._done("error")
+            return
+
+        if self._check_stop():
+            return
         self.progress(100, "全部完成!", 3)
         self.log("━" * 50)
-        self.log("\U0001f389 全部完成!")
-        return True
+        self.log("🎉 全部完成!")
 
-    def _done(self):
-        self.q.put(("done", None))
+    def _done(self, status: str = "success"):
+        self.q.put(("done", status))
 
 
 def _find_bundled_browser() -> str | None:
@@ -650,20 +665,23 @@ class App(ctk.CTk):
                 if detail:
                     self.progress_detail.configure(text=detail)
             elif mtype == "done":
-                self._finish(success=True)
+                status = mval if isinstance(mval, str) else "success"
+                self._finish(status)
             elif mtype == "error":
                 self._set_status(f"●  错误: {str(mval)[:50]}", DANGER)
-                self._finish(success=False)
+                self._finish("error")
         self.after(120, self._poll_queue)
 
-    def _finish(self, success: bool):
+    def _finish(self, status: str):
         self.running = False
         self.start_btn.configure(state="normal")
         self.stop_btn.configure(state="disabled")
-        if success:
+        if status == "success":
             self._set_status("●  全部完成", SUCCESS)
             self._set_step(4)
             self._show_toast("🎉  分类完成！")
+        elif status == "stopped":
+            self._set_status("●  已停止", WARNING)
         else:
             self._set_status("●  运行出错", DANGER)
 

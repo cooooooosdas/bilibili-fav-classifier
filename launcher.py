@@ -178,6 +178,7 @@ class PipelineRunner:
         enrich_meta(session=session, progress_cb=_prog)
         self.progress(50, "标签补充完成", 1)
         self.log("✓ 标签/分区补充完成")
+        return True
 
     @_pipeline_step
     def _classify(self):
@@ -223,6 +224,7 @@ class PipelineRunner:
                 f"⚠ '其他'包含 {len(result.unmatched_ups)} 个UP主"
                 " (可编辑 seed_mappings.json 优化)"
             )
+        return True
 
     @_pipeline_step
     def _apply(self):
@@ -245,6 +247,7 @@ class PipelineRunner:
         self.progress(100, "全部完成!", 3)
         self.log("━" * 50)
         self.log("\U0001f389 全部完成!")
+        return True
 
     def _done(self):
         self.q.put(("done", None))

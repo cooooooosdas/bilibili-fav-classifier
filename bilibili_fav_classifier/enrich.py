@@ -32,7 +32,8 @@ def _fetch_video_meta(bvid: str, http) -> dict:
         data = j.get("data", {})
         tags = [t.get("tag_name", "") for t in data.get("tags", [])]
         return {"tname": data.get("tname", ""), "tags": tags}
-    except Exception:
+    except Exception as exc:
+        print(f"    [warn] 获取 {bvid} 元数据失败: {exc}")
         return {}
 
 
@@ -69,9 +70,16 @@ def enrich_meta(
 
     cache: dict[str, dict] = {}
     if cache_path.exists():
-        cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        try:
+            cache = json.loads(cache_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"警告: 缓存文件损坏 ({exc})，将重新获取全部标签")
 
-    favs = json.loads(favs_path.read_text(encoding="utf-8"))
+    try:
+        favs = json.loads(favs_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"错误: 收藏夹数据文件损坏: {exc}")
+        return
     videos = favs.get("videos", [])
 
     need_fetch = []
@@ -106,7 +114,7 @@ def enrich_meta(
         if (i + 1) % 20 == 0:
             print(f"    进度: {i + 1}/{total} (命中 {ok})")
         if progress_cb:
-            pct = int((i + 1) / total * 100)
+            pct = int((i + 1) / total * 100) if total > 0 else 100
             progress_cb(pct, "补充标签...", f"{i + 1}/{total}  (命中 {ok})")
         time.sleep(0.5)
 

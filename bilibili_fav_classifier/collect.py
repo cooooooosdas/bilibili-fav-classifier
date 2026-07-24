@@ -6,6 +6,7 @@ User IDs are auto-detected from the API and persisted to config.json.
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 from collections import defaultdict
 from pathlib import Path
@@ -90,12 +91,14 @@ async def collect(chrome_path: str | None = None, output_dir: Path | None = None
 
         # Fetch folders list using the logged-in user's mid
         folders = await page.evaluate(f'''async () => {{
-            const r = await fetch(
-                "{API_BASE}/x/v3/fav/folder/created/list-all"
-                + "?up_mid={mid}&platform=web"
-            );
-            const j = await r.json();
-            return j.data?.list || [];
+            try {{
+                const r = await fetch(
+                    "{API_BASE}/x/v3/fav/folder/created/list-all"
+                    + "?up_mid={mid}&platform=web"
+                );
+                const j = await r.json();
+                return j.data?.list || [];
+            }} catch (e) {{ return []; }}
         }}''')
         print(f"==> 你的收藏夹 ({len(folders)} 个):")
         for f in folders:
@@ -127,17 +130,22 @@ async def collect(chrome_path: str | None = None, output_dir: Path | None = None
         all_items = await page.evaluate(f'''async () => {{
             const all = [];
             for (let pn = 1; pn <= 200; pn++) {{
-                const r = await fetch(
-                    "{API_BASE}/x/v3/fav/resource/list"
-                    + "?media_id={default_id}&pn=" + pn
-                    + "&ps=20&platform=web&order=mtime"
-                );
-                const j = await r.json();
-                if (j.code !== 0) {{ all.push({{error:true,code:j.code,page:pn}}); break; }}
-                const medias = j.data?.medias || [];
-                all.push(...medias);
-                if (!j.data?.has_more || medias.length === 0) break;
-                await new Promise(res => setTimeout(res, 800));
+                try {{
+                    const r = await fetch(
+                        "{API_BASE}/x/v3/fav/resource/list"
+                        + "?media_id={default_id}&pn=" + pn
+                        + "&ps=20&platform=web&order=mtime"
+                    );
+                    const j = await r.json();
+                    if (j.code !== 0) {{ all.push({{error:true,code:j.code,page:pn}}); break; }}
+                    const medias = j.data?.medias || [];
+                    all.push(...medias);
+                    if (!j.data?.has_more || medias.length === 0) break;
+                    await new Promise(res => setTimeout(res, 800));
+                }} catch (e) {{
+                    all.push({{error:true,code:-1,page:pn}});
+                    break;
+                }}
             }}
             return all;
         }}''')
@@ -157,7 +165,7 @@ async def collect(chrome_path: str | None = None, output_dir: Path | None = None
             videos.append({
                 "id": it.get("id"),
                 "bvid": it.get("bvid"),
-                "title": (
+                "title": html.unescape(
                     (it.get("title") or "")
                     .replace('<em class="keyword">', "")
                     .replace("</em>", "")

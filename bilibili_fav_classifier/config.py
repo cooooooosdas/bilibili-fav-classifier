@@ -53,7 +53,11 @@ SEED_FILE = ROOT / "seed_mappings.json"
 def load_seed_mappings() -> dict[str, list[str]]:
     """Load UP主 → folder mapping from seed_mappings.json."""
     if SEED_FILE.exists():
-        return json.loads(SEED_FILE.read_text(encoding="utf-8"))
+        try:
+            return json.loads(SEED_FILE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"警告: {SEED_FILE} 读取失败 ({exc})，使用空映射")
+            return {}
     return {}
 
 

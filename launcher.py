@@ -12,6 +12,7 @@ import os
 import queue
 import sys
 import threading
+from functools import wraps
 from pathlib import Path
 
 import customtkinter as ctk
@@ -86,26 +87,47 @@ class PipelineRunner:
     def stop(self):
         self._stop.set()
 
+    @staticmethod
+    def _pipeline_step(method):
+        @wraps(method)
+        def wrapper(self, *args, **kwargs):
+            if self._stop.is_set():
+                return False
+            try:
+                return method(self, *args, **kwargs)
+            except Exception as exc:
+                self.log(f"\n❌ 错误: {exc}")
+                import traceback
+                self.log(traceback.format_exc())
+                self.q.put(("error", str(exc)))
+                return False
+        return wrapper
+
     def run(self):
         try:
-            self._collect()
+            if not self._collect():
+                return self._done()
             if self._stop.is_set():
                 return self._done()
-            self._enrich()
+            if not self._enrich():
+                return self._done()
             if self._stop.is_set():
                 return self._done()
-            self._classify()
+            if not self._classify():
+                return self._done()
             if self._stop.is_set():
                 return self._done()
-            self._apply()
+            if not self._apply():
+                return self._done()
             self._done()
         except Exception as exc:
             self.log(f"\n❌ 错误: {exc}")
             import traceback
-
             self.log(traceback.format_exc())
             self.q.put(("error", str(exc)))
+            self._done()
 
+    @_pipeline_step
     def _collect(self):
         self.log("━" * 50)
         self.log("步骤 1/4: 扫码登录并拉取收藏夹")
@@ -120,15 +142,19 @@ class PipelineRunner:
             asyncio.run(collect(bundled, progress_cb=_prog))
         except Exception as exc:
             self.log(f"❌ 拉取失败: {exc}")
-            return
+            return False
 
         if self._stop.is_set():
-            return
+            return False
         if not FAVS_JSON.exists():
             self.log("❌ 收藏夹数据未生成")
-            return
+            return False
 
-        favs = json.loads(FAVS_JSON.read_text(encoding="utf-8"))
+        try:
+            favs = json.loads(FAVS_JSON.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            self.log(f"❌ 收藏夹数据文件损坏: {exc}")
+            return False
         count = favs.get('count', 0)
         self.log(f"✓ 已拉取 {count} 个视频")
         self.progress(25, "收藏夹拉取完成", 0, f"共 {count} 个视频")
@@ -136,7 +162,9 @@ class PipelineRunner:
         cfg = load_user_config()
         self.log(f"✓ MID: {cfg.get('USER_MID', '?')}")
         self.log(f"✓ 默认收藏夹 ID: {cfg.get('DEFAULT_FAV_ID', '?')}")
+        return True
 
+    @_pipeline_step
     def _enrich(self):
         self.log("━" * 50)
         self.log("步骤 2/4: 补充视频标签和分区")
@@ -151,12 +179,17 @@ class PipelineRunner:
         self.progress(50, "标签补充完成", 1)
         self.log("✓ 标签/分区补充完成")
 
+    @_pipeline_step
     def _classify(self):
         self.log("━" * 50)
         self.log("步骤 3/4: 智能分类")
         self.progress(55, "分析分类...", 2, "加载数据中...")
 
-        favs = json.loads(FAVS_JSON.read_text(encoding="utf-8"))
+        try:
+            favs = json.loads(FAVS_JSON.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            self.log(f"❌ 收藏夹数据文件损坏: {exc}")
+            return False
         seed_map = load_seed_mappings()
         total = len(favs.get("videos", []))
         self.progress(60, "正在分类...", 2, f"共 {total} 个视频，匹配分类规则...")
@@ -191,6 +224,7 @@ class PipelineRunner:
                 " (可编辑 seed_mappings.json 优化)"
             )
 
+    @_pipeline_step
     def _apply(self):
         self.log("━" * 50)
         self.log("步骤 4/4: 应用分类计划")
@@ -205,6 +239,9 @@ class PipelineRunner:
             user_mid=session.mid, default_fav_id=cfg.get("DEFAULT_FAV_ID", 0),
             progress_cb=_prog,
         )
+        if self._stop.is_set():
+            self.log("⏹ 用户停止操作")
+            return False
         self.progress(100, "全部完成!", 3)
         self.log("━" * 50)
         self.log("\U0001f389 全部完成!")

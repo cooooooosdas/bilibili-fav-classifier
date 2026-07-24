@@ -113,6 +113,10 @@ def apply(
                 log.append({"folder": folder_name, "error": "create failed", "resp": r})
                 continue
             fid = r.get("data", {}).get("id")
+            if not fid:
+                print(f"    创建响应异常: 缺少文件夹ID")
+                log.append({"folder": folder_name, "error": "create response missing id", "resp": r})
+                continue
             name_to_id[folder_name] = fid
             print(f"    创建成功 id={fid}")
             if progress_cb:

@@ -32,7 +32,12 @@ class Session:
     @classmethod
     def load(cls) -> Session:
         """Load cookies from disk and extract CSRF token + mid."""
-        raw = json.loads(COOKIES_PATH.read_text(encoding="utf-8"))
+        try:
+            raw = json.loads(COOKIES_PATH.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raise ValueError("cookies.json 不存在，请先运行 collect 登录") from None
+        except (json.JSONDecodeError, OSError) as exc:
+            raise ValueError(f"cookies.json 格式错误: {exc}") from None
         cookies = {c["name"]: c["value"] for c in raw}
         csrf = cookies.get("bili_jct", "")
         if not csrf:

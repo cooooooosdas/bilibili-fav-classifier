@@ -63,7 +63,11 @@ def main():
         if not FAVS_JSON.exists():
             print("==> 请先运行 collect（和可选的 enrich_meta）")
             return
-        favs = json.loads(FAVS_JSON.read_text(encoding="utf-8"))
+        try:
+            favs = json.loads(FAVS_JSON.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"错误: 收藏夹数据文件损坏: {exc}")
+            return
         seed_map = load_seed_mappings()
         result = autoclassify(favs, seed_map)
 
@@ -88,7 +92,11 @@ def main():
         if not FAVS_JSON.exists():
             print("==> 请先运行 collect")
             return
-        favs = json.loads(FAVS_JSON.read_text(encoding="utf-8"))
+        try:
+            favs = json.loads(FAVS_JSON.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"错误: 收藏夹数据文件损坏: {exc}")
+            return
         seed_map = load_seed_mappings()
         plan = genplan(favs, seed_map)
         PLAN_JSON.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")

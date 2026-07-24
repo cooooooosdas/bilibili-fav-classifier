@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
-SRC = Path(r"C:\Users\胡希\Downloads\ChatGPT_Image_2026年7月22日_23_57_14.png")
+SRC = Path(__file__).parent / "src_logo.png"
 OUT = Path(__file__).parent / "assets"
 OUT.mkdir(exist_ok=True)
 

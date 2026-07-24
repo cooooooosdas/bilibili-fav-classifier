@@ -4,7 +4,7 @@ Usage:
     python build.py
 
 Output:
-    dist/B站收藏夹分类/B站收藏夹分类.exe   (+ data files + browsers)
+    dist/bilibili-fav-classifier/bilibili-fav-classifier.exe   (+ data files + browsers)
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-APP_NAME = "B站收藏夹分类"
+APP_NAME = "bilibili-fav-classifier"
 PROJECT_ROOT = Path(__file__).parent
 
 
@@ -134,7 +134,7 @@ def main():
     print(f"   Total size: {size:.0f} MB")
     print(f"   Location:   {dist_dir}")
     print()
-    print("  You can now distribute the entire 'dist/B站收藏夹分类' folder.")
+    print("  You can now distribute the entire 'dist/bilibili-fav-classifier' folder.")
 
 
 if __name__ == "__main__":

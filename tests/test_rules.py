@@ -69,7 +69,7 @@ class TestPartitionMatchRules:
         assert partition_match("科技") == "AI与编程技术"
 
     def test_digital_partition(self):
-        assert partition_match("数码") == "AI与编程技术"
+        assert partition_match("数码") == "汽车·数码"
 
     def test_knowledge_partition(self):
         assert partition_match("知识") == "学习与竞赛"

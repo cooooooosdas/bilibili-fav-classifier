@@ -228,9 +228,13 @@ class PipelineRunner:
             self.log(f"    {folder}: {len(vids)}")
         if result.unmatched_ups:
             self.log(
-                f"⚠ '其他'包含 {len(result.unmatched_ups)} 个UP主"
-                " (可编辑 seed_mappings.json 优化)"
+                f"⚠ '其他'共 {result.layer_counts.get('fallback', 0)} 个视频"
+                f" ({len(result.unmatched_ups)} 个未映射UP主)"
             )
+        if result.duplicate_ups:
+            dup_list = ", ".join(sorted(result.duplicate_ups.keys())[:5])
+            suffix = f"... (共 {len(result.duplicate_ups)} 个)" if len(result.duplicate_ups) > 5 else ""
+            self.log(f"⚠ 重复UP映射: {dup_list}{suffix}")
 
     def _apply(self):
         self.log("━" * 50)

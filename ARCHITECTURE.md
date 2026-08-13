@@ -82,17 +82,17 @@ classify.py (680 lines)          collect.py    ~150 lines  (async browser)
 
 **Solution:** Delete the wrapper. Callers import from mappings.py directly.
 
-### 5. genplan() — Dead Code (SPECULATIVE)
+### 5. genplan() — RESOLVED
 
 **Problem:** genplan() at lines 427–465 is untested, undocumented in the docstring, and bypasses all classification layers. Appears to be abandoned.
 
-**Solution:** Delete it (or document it as an intentional simplification path).
+**Solution (v1.3.0):** Deleted. Use autoclassify() for full classification pipeline.
 
-### 6. Seed Mappings — Silent UP Ambiguity (SPECULATIVE)
+### 6. Seed Mappings — Silent UP Ambiguity — RESOLVED
 
 **Problem:** A UP主 can appear in multiple folders. Last-write-wins silently. No validation.
 
-**Solution:** Add a validation function that checks for duplicates and warns at load time.
+**Solution (v1.3.0):** Added `duplicate_ups` detection in autoclassify. Returns dict of UP主 → target folders for debugging.
 
 ## Top Recommendation
 

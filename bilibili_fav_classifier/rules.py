@@ -3,6 +3,9 @@
 Bilibili assigns each video an official partition (tname) and user-added tags.
 These are more reliable signals than title keywords alone.
 """
+from __future__ import annotations
+
+import re
 
 # ── Bilibili official partition (tname) → folder mapping ────────────
 # Full list of Bilibili partitions: https://www.bilibili.com/blackboard/blackroom.html
@@ -64,6 +67,24 @@ PARTITION_RULES: dict[str, str] = {
     "时尚": "生活与社会",
     "美妆": "生活与社会",
     "穿搭": "生活与社会",
+    # 动漫区（番剧/国创/动画及其子分区）
+    "动画": "游戏与动漫",
+    "番剧": "游戏与动漫",
+    "国创": "游戏与动漫",
+    "国创相关": "游戏与动漫",
+    "MAD·AMV": "游戏与动漫",
+    "MMD·3D": "游戏与动漫",
+    "手书·短片": "游戏与动漫",
+    "同人": "游戏与动漫",
+    "综合": "游戏与动漫",
+    "音游": "游戏与动漫",
+    # 影视延伸 / 资讯 / 鬼畜
+    "影视相关": "生活与社会",
+    "影视杂谈": "生活与社会",
+    "影视剪辑": "生活与社会",
+    "小剧场": "生活与社会",
+    "资讯": "生活与社会",
+    "鬼畜": "生活与社会",
     # 动物圈（已在上面）
     # 汽车（已在上面）
 }
@@ -75,7 +96,7 @@ PARTITION_RULES: dict[str, str] = {
 
 TAG_RULES: list[tuple[str, str]] = [
     # AI & Programming
-    ("编程/python/java/c++/代码/算法/claude/cursor/coze/agent/前端/后端/框架/开发/软件/程序员/vscode/git/docker/api/github/linux/debug/开源/人工智能/machine learning/deep learning/神经网络/大模型/llm/rag/chatgpt/gpt/deepseek/transformer/微调/finetune/rag/爬虫/后端/前端/react/vue/node/typescript/rust/golang", "AI与编程技术"),
+    ("编程/python/java/c++/代码/算法/claude/cursor/coze/agent/前端/后端/框架/开发/软件/程序员/vscode/git/docker/api/github/linux/debug/开源/人工智能/machine learning/deep learning/神经网络/大模型/llm/rag/chatgpt/gpt/deepseek/transformer/微调/finetune/rag/爬虫/后端/前端/react/vue/node/typescript/rust/golang/openai", "AI与编程技术"),
     # Learning
     ("考研/数学/物理/化学/生物/英语/四级/六级/cet/雅思/托福/论文/科研/sci/竞赛/acm/蓝桥杯/数模/期末/复习/课件/经管/高数/线代/概率/离散/专业课/大学/课程/读书/阅读/书籍/书评/文学/哲学/公开课/ted", "学习与竞赛"),
     # Gaming & Anime
@@ -129,7 +150,7 @@ KEYWORD_RULES: list[tuple[str, str]] = [
         "/Python/Java/C++/前端/后端/框架/引擎/软件/程序"
         "/VSCode/Git/Linux/Docker/API/GitHub/程序员"
         "/深度学习/机器学习/神经网络/大模型/LLM/RAG"
-        "/ChatGPT/GPT/DeepSeek/爬虫/React/Vue/Node/Rust/Go",
+        "/ChatGPT/GPT/DeepSeek/爬虫/React/Vue/Node/Rust/Golang/Go语言/OpenAI",
         "AI与编程技术",
     ),
     # Learning
@@ -224,6 +245,38 @@ KEYWORD_RULES: list[tuple[str, str]] = [
 # ──────────────────────── Matching functions ────────────────────────
 
 
+def _boundary_check(text: str, kw: str) -> bool:
+    """Word boundary check: use word boundary for pure English inputs,
+    substring match for Chinese-containing inputs (since \b doesn't work well at Chinese/English boundaries).
+    """
+    # If input text contains non-ASCII characters (Chinese), use substring match
+    # because word boundary \b doesn't work well at Chinese/English boundaries
+    if any(ord(c) > 127 for c in text):
+        return kw in text
+    # Pure English input: use word boundary to avoid false positives
+    if not any(ord(c) > 127 for c in kw):
+        pattern = rf"\b{re.escape(kw)}\b"
+        return bool(re.search(pattern, text))
+    # Mixed case: fallback to substring (shouldn't happen in practice)
+    return kw in text
+
+
+def normalize_tags(tags: list[str] | str | None) -> list[str]:
+    """Normalize tag input: accept list or comma-separated string.
+
+    B站 fav list API returns tags as comma-separated string.
+    After enrich, tags become list. This function handles both.
+    """
+    if not tags:
+        return []
+    if isinstance(tags, str):
+        if not tags.strip():
+            return []
+        # Comma-separated string -> list
+        return [t.strip() for t in tags.split(",") if t.strip()]
+    return list(tags)
+
+
 def partition_match(tname: str | None) -> str | None:
     """Match Bilibili partition name to a folder."""
     if not tname:
@@ -231,23 +284,31 @@ def partition_match(tname: str | None) -> str | None:
     return PARTITION_RULES.get(tname)
 
 
-def tag_match(tags: list[str] | None) -> str | None:
-    """Match user-added tags to a folder (first match wins)."""
-    if not tags:
+def tag_match(tags: list[str] | str | None) -> str | None:
+    """Match user-added tags to a folder (first match wins).
+
+    Accepts list or comma-separated string (defensive against API format).
+    """
+    normalized = normalize_tags(tags)
+    if not normalized:
         return None
-    tag_str = " ".join(t.lower() for t in tags)
+    tag_str = " ".join(t.lower() for t in normalized)
     for rule_str, folder in TAG_RULES:
         for kw in rule_str.split("/"):
-            if kw.lower() in tag_str:
+            if _boundary_check(tag_str, kw.lower()):
                 return folder
     return None
 
 
 def keyword_classify(title: str) -> str | None:
-    """Match title keywords to a folder (first match wins)."""
+    """Match title keywords to a folder (first match wins).
+
+    Uses word boundary for ASCII keywords to avoid false positives
+    (e.g., 'go' in 'good' or 'ai' in 'again').
+    """
     t = (title or "").lower()
     for keywords, folder in KEYWORD_RULES:
         for kw in keywords.split("/"):
-            if kw.lower() in t:
+            if _boundary_check(t, kw.lower()):
                 return folder
     return None

@@ -87,9 +87,11 @@ def _write_readme(dist_dir: Path):
         "[*] B站收藏夹智能分类 - 使用说明\n"
         f"{sep}\n"
         "\n"
-        "  1. 双击运行 B站收藏夹分类.exe\n"
-        "  2. 在弹出的浏览器中扫码登录 B站\n"
-        "  3. 程序自动完成: 拉取 -> 补充标签 -> 智能分类 -> 移动视频\n"
+        "  1. 双击运行 bilibili-fav-classifier.exe\n"
+        "  2. 首次使用会提示安装浏览器，按提示操作或手动运行:\n"
+        "     pip install playwright && playwright install chromium\n"
+        "  3. 在弹出的浏览器中扫码登录 B站\n"
+        "  4. 程序自动完成: 拉取 -> 补充标签 -> 智能分类 -> 移动视频\n"
         "\n"
         "[i] 数据文件说明:\n"
         "  config.json          -- 用户配置 (MID, 默认收藏夹ID)\n"
@@ -119,11 +121,10 @@ def _write_readme(dist_dir: Path):
 def main():
     os.chdir(PROJECT_ROOT)
 
-    _install_browsers()
     _build_exe()
 
     dist_dir = PROJECT_ROOT / "dist" / APP_NAME
-    _copy_browsers(dist_dir)
+    # 不再打包 2GB 浏览器，用户首次运行会自动下载或提示
     _copy_templates(dist_dir)
     _write_readme(dist_dir)
 
@@ -134,6 +135,8 @@ def main():
     print(f"   Total size: {size:.0f} MB")
     print(f"   Location:   {dist_dir}")
     print()
+    print("  注意：不包含浏览器，首次运行会自动下载（约 150MB）")
+    print("  或手动运行: pip install playwright && playwright install chromium")
     print("  You can now distribute the entire 'dist/bilibili-fav-classifier' folder.")
 
 

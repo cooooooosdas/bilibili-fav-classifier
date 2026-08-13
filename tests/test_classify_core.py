@@ -17,7 +17,6 @@ from bilibili_fav_classifier.classify_core import (
     ClassifyResult,
     autoclassify,
     classify_video,
-    genplan,
 )
 
 
@@ -175,52 +174,6 @@ class TestAutoclassify:
         assert result.total == 5
 
 
-# ── genplan ──────────────────────────────────────────────────────
-
-class TestGenplan:
-    def test_returns_plan_dict(self, sample_favs, sample_seed_map):
-        plan = genplan(sample_favs, sample_seed_map)
-        assert isinstance(plan, dict)
-        assert plan["move"] is True
-        assert "groups" in plan
-
-    def test_known_up_in_correct_folder(self, sample_favs, sample_seed_map):
-        """Videos from known UP主 go to their mapped folder."""
-        plan = genplan(sample_favs, sample_seed_map)
-        groups = plan["groups"]
-        assert "学习与竞赛" in groups
-        bvids = [v["bvid"] for v in groups["学习与竞赛"]]
-        assert "BV3" in bvids
-
-    def test_unknown_up_goes_to_other(self, sample_favs, sample_seed_map):
-        """Videos from unknown UP主 go to '其他'."""
-        plan = genplan(sample_favs, sample_seed_map)
-        assert "其他" in plan["groups"]
-        bvids = [v["bvid"] for v in plan["groups"]["其他"]]
-        assert "BV5" in bvids  # 未知UP主xyz not in seed_map
-
-    def test_no_file_io(self, sample_favs, sample_seed_map, tmp_path):
-        """genplan does not create any files."""
-        plan = genplan(sample_favs, sample_seed_map)
-        json_files = list(tmp_path.glob("*.json"))
-        assert len(json_files) == 0
-
-    def test_empty_favs(self):
-        """Handles empty videos list."""
-        plan = genplan({"videos": []}, {})
-        assert plan["groups"] == {}
-
-    def test_uses_bvid_as_fallback_id(self):
-        """When video has no 'id', uses bvid as the resource id."""
-        favs = {
-            "videos": [
-                {"bvid": "BV_only", "title": "x", "upper": "", "id": None},
-            ],
-        }
-        plan = genplan(favs, {})
-        assert plan["groups"]["其他"][0]["id"] == "BV_only"
-
-
 # ── ClassifyResult ────────────────────────────────────────────────
 
 class TestClassifyResult:
@@ -229,6 +182,7 @@ class TestClassifyResult:
         assert result.groups == {}
         assert result.layer_counts == {}
         assert result.unmatched_ups == {}
+        assert result.duplicate_ups == {}  # New field
         assert result.total == 0
 
     def test_with_data(self):
@@ -236,12 +190,26 @@ class TestClassifyResult:
             groups={"AI": [{"id": 1}]},
             layer_counts={"tag": 1},
             unmatched_ups={"UP1": ["title1"]},
+            duplicate_ups={"李永乐老师": []},
             total=1,
         )
         assert result.total == 1
         assert "AI" in result.groups
         assert result.layer_counts["tag"] == 1
         assert "UP1" in result.unmatched_ups
+        assert result.duplicate_ups == {"李永乐老师": []}
+
+    def test_duplicate_ups_tracked(self):
+        """ClassifyResult should include duplicate_ups when UP is mapped to multiple folders."""
+        # Simulate autoclassify detecting duplicate UP mappings
+        seed_map = {
+            "AI与编程技术": ["李永乐老师", "罗翔说刑法"],
+            "学习与竞赛": ["李永乐老师"],
+        }
+        favs = {"videos": [{"title": "test", "bvid": "BV1", "tags": [], "tname": "", "upper": ""}]}
+        result = autoclassify(favs, seed_map)
+        assert "李永乐老师" in result.duplicate_ups
+        assert "罗翔说刑法" not in result.duplicate_ups
 
 
 if __name__ == "__main__":

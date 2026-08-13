@@ -155,26 +155,29 @@ class TestFallback:
 class TestPriority:
     """Higher-priority layers win over lower ones."""
 
+    def test_up_beats_partition(self, sample_up_map):
+        """UP mapping should win over partition match."""
+        video = {"title": "xx", "tags": [], "tname": "科技", "upper": "罗翔说刑法"}
+        folder, layer = classify_video(video, sample_up_map)
+        # 罗翔说刑法 maps to 学习与竞赛; 科技 also maps to AI与编程技术
+        # UP should win over partition
+        assert folder == "学习与竞赛"
+        assert layer == "up"
+
+    def test_up_beats_tag(self, sample_up_map):
+        """UP mapping should win over tag match."""
+        video = {"title": "xx", "tags": ["游戏"], "tname": "", "upper": "罗翔说刑法"}
+        folder, layer = classify_video(video, sample_up_map)
+        # 罗翔说刑法 maps to 学习与竞赛; 游戏 tag maps to 游戏与动漫
+        # UP should win over tag
+        assert folder == "学习与竞赛"
+        assert layer == "up"
+
     def test_tag_beats_partition(self, empty_up_map):
         """Tag match should win even if partition would also match."""
         video = {"title": "xx", "tags": ["编程"], "tname": "游戏", "upper": ""}
         folder, layer = classify_video(video, empty_up_map)
         assert folder == "AI与编程技术"
-        assert layer == "tag"
-
-    def test_partition_beats_up(self, sample_up_map):
-        """Partition match should win over UP mapping."""
-        video = {"title": "xx", "tags": [], "tname": "科技", "upper": "3Blue1Brown"}
-        folder, layer = classify_video(video, sample_up_map)
-        # 3Blue1Brown maps to AI与编程技术; 科技 also maps to AI与编程技术
-        # Both give same folder, but partition should be the layer
-        assert layer == "partition"
-
-    def test_tag_beats_up(self, sample_up_map):
-        """Tag match should win over UP mapping."""
-        video = {"title": "xx", "tags": ["游戏"], "tname": "", "upper": "3Blue1Brown"}
-        folder, layer = classify_video(video, sample_up_map)
-        assert folder == "游戏与动漫"
         assert layer == "tag"
 
     def test_up_beats_keyword(self, sample_up_map):

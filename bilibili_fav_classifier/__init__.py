@@ -14,7 +14,7 @@ import asyncio
 import json
 import sys
 
-from bilibili_fav_classifier.classify_core import ClassifyResult, autoclassify, genplan
+from bilibili_fav_classifier.classify_core import ClassifyResult, autoclassify
 from bilibili_fav_classifier.collect import collect as _collect
 from bilibili_fav_classifier.config import (
     AUTO_CLASSIFY_JSON,
@@ -31,11 +31,13 @@ def _print_classify_result(result: ClassifyResult) -> None:
     """Print classification statistics from ClassifyResult."""
     print(f"\n==> 已生成 {PLAN_JSON}: {len(result.groups)} 个文件夹, 共 {result.total} 个视频")
     print("\n==> 分类命中统计:")
+    print(f"    UP主映射:    {result.layer_counts.get('up', 0)}")
     print(f"    标签匹配:    {result.layer_counts.get('tag', 0)}")
     print(f"    分区匹配:    {result.layer_counts.get('partition', 0)}")
-    print(f"    UP主映射:    {result.layer_counts.get('up', 0)}")
     print(f"    关键词匹配:  {result.layer_counts.get('keyword', 0)}")
-    print(f"    归入'其他':  {len(result.unmatched_ups)} 个UP主")
+    print(f"    归入'其他':  {result.layer_counts.get('fallback', 0)} 个视频")
+    if result.unmatched_ups:
+        print(f"    (含 {len(result.unmatched_ups)} 个未映射UP主)")
     print()
     for f, vids in sorted(result.groups.items(), key=lambda x: -len(x[1])):
         print(f"    - {f}: {len(vids)}")
@@ -87,33 +89,6 @@ def main():
         }
         PLAN_JSON.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
         _print_classify_result(result)
-
-    elif cmd == "genplan":
-        if not FAVS_JSON.exists():
-            print("==> 请先运行 collect")
-            return
-        try:
-            favs = json.loads(FAVS_JSON.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as exc:
-            print(f"错误: 收藏夹数据文件损坏: {exc}")
-            return
-        seed_map = load_seed_mappings()
-        plan = genplan(favs, seed_map)
-        PLAN_JSON.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
-
-        total = sum(len(v) for v in plan.get("groups", {}).values())
-        print(f"==> 已生成 {PLAN_JSON}: {len(plan.get('groups', {}))} 个文件夹, 共 {total} 个视频")
-        for f, bvs in plan.get("groups", {}).items():
-            print(f"    - {f}: {len(bvs)}")
-        unmatched = {
-            up for ups in load_seed_mappings().values() for up in ups
-            if up not in {v.get("upper") for v in favs.get("videos", [])}
-        }
-        if unmatched:
-            sample = sorted(unmatched)[:20]
-            suffix = "..." if len(unmatched) > 20 else ""
-            print(f"==> 未匹配UP主 ({len(unmatched)}): {sample}{suffix}")
-        print("==> 请检查 plan.json, 确认后运行 apply")
 
     elif cmd == "apply":
         session = Session.load()

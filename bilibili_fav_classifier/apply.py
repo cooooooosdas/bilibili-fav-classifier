@@ -83,7 +83,7 @@ def apply(
     if not isinstance(groups, dict):
         print("错误: plan.json['groups'] 格式不正确")
         return
-    total = sum(len(v) for v in groups.values())
+    total = sum(len(v) for k, v in groups.items() if k != "其他")
     print(f"==> 计划: {len(groups)} 个文件夹, 共 {total} 个视频, move={do_move}")
 
     name_to_id, default_id = _load_folders(http, user_mid, default_fav_id)
